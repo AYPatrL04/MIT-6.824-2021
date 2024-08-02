@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"net/rpc"
 	"strings"
 	"sync"
+	"time"
 )
 
 func main() {
@@ -49,6 +51,126 @@ func reducer(key string, values []Pair) int {
 }
 
 // Lec02
+
+func requestVote() bool {
+	time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+	return true
+}
+
+func voteCount01() { // can be detected to have race condition with "go run -race xxx.go"
+	rand.Seed(time.Now().UnixNano())
+
+	count := 0
+	finished := 0
+
+	for i := 0; i < 10; i++ {
+		go func() {
+			vote := requestVote()
+			if vote {
+				count++
+			}
+			finished++
+		}()
+	}
+	for count < 5 && finished != 10 {
+		// wait
+	}
+	if count >= 5 {
+		println("received 5+ votes!")
+	} else {
+		println("lost")
+	}
+}
+
+func voteCount02() { // a kind of solution using mutex
+	rand.Seed(time.Now().UnixNano())
+
+	count := 0
+	finished := 0
+	var mu sync.Mutex
+
+	for i := 0; i < 10; i++ {
+		go func() {
+			vote := requestVote()
+			mu.Lock()
+			defer mu.Unlock()
+			if vote {
+				count++
+			}
+			finished++
+		}()
+	}
+	for {
+		mu.Lock()
+		if count >= 5 || finished == 10 {
+			break
+		}
+		mu.Unlock()
+	}
+	if count >= 5 {
+		println("received 5+ votes!")
+	} else {
+		println("lost")
+	}
+	mu.Unlock()
+}
+
+func voteCount03() { // a kind of solution using mutex and condition variable
+	rand.Seed(time.Now().UnixNano())
+
+	count := 0
+	finished := 0
+	var mu sync.Mutex
+	cond := sync.NewCond(&mu)
+
+	for i := 0; i < 10; i++ {
+		go func() {
+			vote := requestVote()
+			mu.Lock()
+			defer mu.Unlock()
+			if vote {
+				count++
+			}
+			finished++
+			cond.Broadcast()
+		}()
+	}
+
+	mu.Lock()
+	for count < 5 && finished != 10 {
+		cond.Wait()
+	}
+	if count >= 5 {
+		println("received 5+ votes!")
+	} else {
+		println("lost")
+	}
+	mu.Unlock()
+}
+
+func voteCount04() { // a kind of solution using channel
+	rand.Seed(time.Now().UnixNano())
+	count := 0
+	finished := 0
+	ch := make(chan bool)
+	for i := 0; i < 10; i++ {
+		go func() {
+			ch <- requestVote()
+		}()
+	}
+	for count < 5 && finished < 10 {
+		v := <-ch
+		if v {
+			count += 1
+		}
+		finished += 1
+	}
+	if count >= 5 {
+		println("received 5+ votes!")
+	} else {
+		println("lost")
+	}
+}
 
 type fetchState struct {
 	mu      sync.Mutex
