@@ -84,7 +84,7 @@ func reducer(key string, values []Pair) int {
 
 Expensive: shuffle
 
-### Fault Tolerance
+## Fault Tolerance
 **Basic plan**: Coordinator reruns map / reduce tasks if workers fail to respond.
 
 **Can maps / reduces run twice?** Yes, because they are functional / deterministic.
