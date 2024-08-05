@@ -1,3 +1,7 @@
+pkg/
+api.key
+.api.key.trimmed
+*-handin.tar.gz
 # MacOS
 .DS_Store
 #VSCode
