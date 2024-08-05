@@ -33,7 +33,7 @@ func (m *Master) AllocateTask(args *Args, reply *Task) error {
 			} else {
 				for i := 0; i < len(m.MapTasks); i++ {
 					if (!m.MapTasks[i].Finished) &&
-						time.Since(m.MapTasks[i].timeStamp) > time.Second*5 {
+						time.Since(m.MapTasks[i].timeStamp) > time.Second*10 {
 						*reply = *m.MapTasks[i]
 						m.MapTasks[i].timeStamp = time.Now()
 						break
@@ -51,7 +51,7 @@ func (m *Master) AllocateTask(args *Args, reply *Task) error {
 			} else {
 				for i := 0; i < len(m.ReduceTasks); i++ {
 					if (!m.ReduceTasks[i].Finished) &&
-						time.Since(m.ReduceTasks[i].timeStamp) > time.Second*5 {
+						time.Since(m.ReduceTasks[i].timeStamp) > time.Second*10 {
 						*reply = *m.ReduceTasks[i]
 						m.MapTasks[i].timeStamp = time.Now()
 						break
@@ -72,7 +72,7 @@ func (m *Master) Finish(task *Task, reply *Reply) error {
 		mu.Lock()
 		if !m.MapTasks[task.TaskId].Finished {
 			m.MapTasks[task.TaskId].Finished = true
-			m.AvailableTaskCnt--
+			m.AvailableTaskCnt -= 1
 			if m.AvailableTaskCnt == 0 {
 				m.MapTaskStatus = true
 			}
@@ -82,7 +82,7 @@ func (m *Master) Finish(task *Task, reply *Reply) error {
 		mu.Lock()
 		if !m.ReduceTasks[task.TaskId].Finished {
 			m.ReduceTasks[task.TaskId].Finished = true
-			m.AvailableTaskCnt--
+			m.AvailableTaskCnt -= 1
 			if m.AvailableTaskCnt == 0 {
 				m.ReduceTaskStatus = true
 			}
@@ -96,6 +96,8 @@ func (m *Master) Finish(task *Task, reply *Reply) error {
 }
 
 func (m *Master) Check(NReduce int) bool {
+	mu.Lock()
+	defer mu.Unlock()
 	if m.AvailableTaskCnt == 0 {
 		if !m.ReduceTaskStatus && len(m.MapChan) == 0 {
 			m.CreateReduceTask(NReduce)
@@ -138,10 +140,14 @@ func (m *Master) server() {
 }
 
 func (m *Master) Done() bool {
+	mu.Lock()
+	defer mu.Unlock()
 	return m.MapTaskStatus && m.ReduceTaskStatus
 }
 
 func MakeMaster(files []string, NReduce int) *Master {
+	mu.Lock()
+	defer mu.Unlock()
 	m := Master{
 		Status:           Map,
 		MapChan:          make(chan *Task, len(files)),
