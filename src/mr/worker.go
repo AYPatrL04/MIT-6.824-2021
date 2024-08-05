@@ -8,12 +8,26 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type KeyValue struct {
 	Key   string
 	Value string
+}
+
+type KIterator []KeyValue
+
+func (a KIterator) Len() int {
+	return len(a)
+}
+func (a KIterator) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+func (a KIterator) Less(i, j int) bool {
+	return a[i].Key < a[j].Key
 }
 
 func ihash(key string) int {
@@ -24,102 +38,81 @@ func ihash(key string) int {
 
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	w := worker{}
-	w.mapf = mapf
-	w.reducef = reducef
-	w.register()
-	w.run()
-}
-
-type worker struct {
-	id      int
-	mapf    func(string, string) []KeyValue
-	reducef func(string, []string) string
-}
-
-func (w *worker) run() {
-	for {
-		t := w.reqTask()
-		if !t.Alive {
-			DPrintf("worker get task not alive, exit")
-			return
+	work := true
+	flag := false
+	for work {
+		task := Task{}
+		if flag {
+			task.TaskType = Wait
+			flag = false
 		}
-		w.doTask(t)
+		if GetTask(&task) {
+			switch task.TaskType {
+			case Map:
+				Mapper(mapf, &task)
+				FinishTask(&task)
+			case Reduce:
+				Reducer(reducef, &task)
+				FinishTask(&task)
+			case Wait:
+				time.Sleep(time.Second)
+				flag = true
+			default:
+				if task.TaskType == Done {
+					work = false
+				}
+			}
+		} else {
+			break
+		}
 	}
 }
 
-func (w *worker) reqTask() Task {
-	args := TaskArgs{}
-	args.WorkerId = w.id
-	reply := TaskReply{}
-
-	if ok := call("Master.GetOneTask", &args, &reply); !ok {
-		DPrintf("worker get task fail,exit")
-		os.Exit(1)
+func GetTask(reply *Task) bool {
+	args := Args{}
+	if reply.TaskType == Wait {
+		args.Status = Wait
 	}
-	DPrintf("worker get task:%+v", reply.Task)
-	return *reply.Task
+	return call("Master.AllocateTask", &args, reply)
 }
 
-func (w *worker) doTask(t Task) {
-	DPrintf("in do Task")
-
-	switch t.Phase {
-	case MapPhase:
-		w.doMapTask(t)
-	case ReducePhase:
-		w.doReduceTask(t)
-	default:
-		panic(fmt.Sprintf("task phase err: %v", t.Phase))
-	}
-
-}
-
-func (w *worker) doMapTask(t Task) {
-	contents, err := ioutil.ReadFile(t.FileName)
+func Mapper(mapf func(string, string) []KeyValue, task *Task) {
+	fileName := task.FileName
+	file, err := os.Open(fileName)
 	if err != nil {
-		w.reportTask(t, false, err)
-		return
+		log.Fatalf("cannot open %v", fileName)
 	}
-
-	kvs := w.mapf(t.FileName, string(contents))
-	reduces := make([][]KeyValue, t.NReduce)
-	for _, kv := range kvs {
-		idx := ihash(kv.Key) % t.NReduce
-		reduces[idx] = append(reduces[idx], kv)
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", fileName)
 	}
-
-	for idx, l := range reduces {
-		fileName := reduceName(t.Seq, idx)
-		f, err := os.Create(fileName)
+	file.Close()
+	kva := mapf(fileName, string(content))
+	intermediate := make([][]KeyValue, task.NReduce)
+	for _, kv := range kva {
+		i := ihash(kv.Key) % task.NReduce
+		intermediate[i] = append(intermediate[i], kv)
+	}
+	for i, kvs := range intermediate {
+		oname := "mr-" + strconv.Itoa(task.MapId) + "-" + strconv.Itoa(i)
+		f, err := os.Create(oname)
 		if err != nil {
-			w.reportTask(t, false, err)
+			log.Fatalf("cannot create %v", oname)
 			return
 		}
 		enc := json.NewEncoder(f)
-		for _, kv := range l {
-			if err := enc.Encode(&kv); err != nil {
-				w.reportTask(t, false, err)
-			}
-
+		for _, kv := range kvs {
+			enc.Encode(&kv)
 		}
-		if err := f.Close(); err != nil {
-			w.reportTask(t, false, err)
-		}
+		f.Close()
 	}
-	w.reportTask(t, true, nil)
-
 }
 
-func (w *worker) doReduceTask(t Task) {
+func Reducer(reducef func(string, []string) string, task *Task) {
 	maps := make(map[string][]string)
-	for idx := 0; idx < t.NMaps; idx++ {
-		fileName := reduceName(idx, t.Seq)
-		file, err := os.Open(fileName)
-		if err != nil {
-			w.reportTask(t, false, err)
-			return
-		}
+	for i := 0; i < task.NMap; i++ {
+		fileName := fmt.Sprintf("mr-%d-%d", i, task.ReduceId)
+		file, _ := os.Open(fileName)
 		dec := json.NewDecoder(file)
 		for {
 			var kv KeyValue
@@ -132,41 +125,19 @@ func (w *worker) doReduceTask(t Task) {
 			maps[kv.Key] = append(maps[kv.Key], kv.Value)
 		}
 	}
-
+	oname := fmt.Sprintf("mr-out-%d", task.TaskId)
 	res := make([]string, 0, 100)
 	for k, v := range maps {
-		res = append(res, fmt.Sprintf("%v %v\n", k, w.reducef(k, v)))
+		res = append(res, fmt.Sprintf("%v %v\n", k, reducef(k, v)))
 	}
-
-	if err := ioutil.WriteFile(mergeName(t.Seq), []byte(strings.Join(res, "")), 0600); err != nil {
-		w.reportTask(t, false, err)
-	}
-
-	w.reportTask(t, true, nil)
-}
-
-func (w *worker) reportTask(t Task, done bool, err error) {
-	if err != nil {
-		log.Printf("%v", err)
-	}
-	args := ReportTaskArgs{}
-	args.Done = done
-	args.Seq = t.Seq
-	args.Phase = t.Phase
-	args.WorkerId = w.id
-	reply := ReportTaskReply{}
-	if ok := call("Master.ReportTask", &args, &reply); !ok {
-		DPrintf("report task fail:%+v", args)
+	if err := ioutil.WriteFile(oname, []byte(strings.Join(res, "")), 0600); err != nil {
+		log.Fatalf("fail to write %v", oname)
 	}
 }
 
-func (w *worker) register() {
-	args := &RegisterArgs{}
-	reply := &RegisterReply{}
-	if ok := call("Master.RegWorker", args, reply); !ok {
-		log.Fatal("reg fail")
-	}
-	w.id = reply.WorkerId
+func FinishTask(task *Task) {
+	reply := Reply{}
+	call("Master.Finish", task, &reply)
 }
 
 func call(rpcname string, args interface{}, reply interface{}) bool {
@@ -174,8 +145,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	sockname := masterSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		DPrintf("dialing:", err)
-		return false
+		log.Fatal("dialing: ", err)
 	}
 	defer c.Close()
 
@@ -184,6 +154,6 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	DPrintf("%+v", err)
+	fmt.Println(err)
 	return false
 }

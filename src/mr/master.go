@@ -6,163 +6,128 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
-	"sync"
 	"time"
 )
 
-const (
-	TaskStatusReady   = 0
-	TaskStatusQueue   = 1
-	TaskStatusRunning = 2
-	TaskStatusFinish  = 3
-	TaskStatusErr     = 4
-)
-
-const (
-	MaxTaskRunTime   = time.Second * 5
-	ScheduleInterval = time.Millisecond * 500
-)
-
-type TaskStat struct {
-	Status    int
-	WorkerId  int
-	StartTime time.Time
-}
-
 type Master struct {
-	files     []string
-	nReduce   int
-	taskPhase TaskPhase
-	taskStats []TaskStat
-	mu        sync.Mutex
-	done      bool
-	workerSeq int
-	taskCh    chan Task
+	Status           int
+	MapTasks         []*Task
+	MapChan          chan *Task
+	MapTaskStatus    bool
+	ReduceTasks      []*Task
+	ReduceChan       chan *Task
+	ReduceTaskStatus bool
+	AvailableTaskCnt int
 }
 
-func (m *Master) getTask(taskSeq int) Task {
-	task := Task{
-		FileName: "",
-		NReduce:  m.nReduce,
-		NMaps:    len(m.files),
-		Seq:      taskSeq,
-		Phase:    m.taskPhase,
-		Alive:    true,
-	}
-	DPrintf("m:%+v, taskseq:%d, lenfiles:%d, lents:%d", m, taskSeq, len(m.files), len(m.taskStats))
-	if task.Phase == MapPhase {
-		task.FileName = m.files[taskSeq]
-	}
-	return task
-}
-
-func (m *Master) schedule() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.done {
-		return
-	}
-	allFinish := true
-	for index, t := range m.taskStats {
-		switch t.Status {
-		case TaskStatusReady:
-			allFinish = false
-			m.taskCh <- m.getTask(index)
-			m.taskStats[index].Status = TaskStatusQueue
-		case TaskStatusQueue:
-			allFinish = false
-		case TaskStatusRunning:
-			allFinish = false
-			if time.Now().Sub(t.StartTime) > MaxTaskRunTime {
-				m.taskStats[index].Status = TaskStatusQueue
-				m.taskCh <- m.getTask(index)
-			}
-		case TaskStatusFinish:
-		case TaskStatusErr:
-			allFinish = false
-			m.taskStats[index].Status = TaskStatusQueue
-			m.taskCh <- m.getTask(index)
-		default:
-			panic("t.status err")
-		}
-	}
-	if allFinish {
-		if m.taskPhase == MapPhase {
-			m.initReduceTask()
+func (m *Master) AllocateTask(args *Args, reply *Task) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if m.Status == Map {
+		if len(m.MapChan) > 0 {
+			*reply = *<-m.MapChan
+			m.MapTasks[reply.TaskId].timeStamp = time.Now()
 		} else {
-			m.done = true
+			if args.Status != Wait {
+				reply.TaskType = Wait
+			} else {
+				for i := 0; i < len(m.MapTasks); i++ {
+					if (!m.MapTasks[i].Finished) &&
+						time.Since(m.MapTasks[i].timeStamp) > time.Second*5 {
+						*reply = *m.MapTasks[i]
+						m.MapTasks[i].timeStamp = time.Now()
+						break
+					}
+				}
+			}
 		}
-	}
-}
-
-func (m *Master) initMapTask() {
-	m.taskPhase = MapPhase
-	m.taskStats = make([]TaskStat, len(m.files))
-}
-
-func (m *Master) initReduceTask() {
-	DPrintf("init ReduceTask")
-	m.taskPhase = ReducePhase
-	m.taskStats = make([]TaskStat, m.nReduce)
-}
-
-func (m *Master) regTask(args *TaskArgs, task *Task) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if task.Phase != m.taskPhase {
-		panic("req Task phase neq")
-	}
-
-	m.taskStats[task.Seq].Status = TaskStatusRunning
-	m.taskStats[task.Seq].WorkerId = args.WorkerId
-	m.taskStats[task.Seq].StartTime = time.Now()
-}
-
-func (m *Master) GetOneTask(args *TaskArgs, reply *TaskReply) error {
-	task := <-m.taskCh
-	reply.Task = &task
-
-	if task.Alive {
-		m.regTask(args, &task)
-	}
-	DPrintf("in get one Task, args:%+v, reply:%+v", args, reply)
-	return nil
-}
-
-func (m *Master) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	DPrintf("get report task: %+v, taskPhase: %+v", args, m.taskPhase)
-
-	if m.taskPhase != args.Phase || args.WorkerId != m.taskStats[args.Seq].WorkerId {
-		return nil
-	}
-
-	if args.Done {
-		m.taskStats[args.Seq].Status = TaskStatusFinish
+	} else if m.Status == Reduce {
+		if len(m.ReduceChan) > 0 {
+			*reply = *<-m.ReduceChan
+			m.ReduceTasks[reply.TaskId].timeStamp = time.Now()
+		} else {
+			if args.Status != Wait {
+				reply.TaskType = Wait
+			} else {
+				for i := 0; i < len(m.ReduceTasks); i++ {
+					if (!m.ReduceTasks[i].Finished) &&
+						time.Since(m.ReduceTasks[i].timeStamp) > time.Second*5 {
+						*reply = *m.ReduceTasks[i]
+						m.MapTasks[i].timeStamp = time.Now()
+						break
+					}
+				}
+			}
+		}
+	} else if m.MapTaskStatus && m.ReduceTaskStatus {
+		reply.TaskType = Done
 	} else {
-		m.taskStats[args.Seq].Status = TaskStatusErr
+		reply.TaskType = Wait
 	}
-
-	go m.schedule()
 	return nil
 }
 
-func (m *Master) RegWorker(args *RegisterArgs, reply *RegisterReply) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.workerSeq += 1
-	reply.WorkerId = m.workerSeq
+func (m *Master) Finish(task *Task, reply *Reply) error {
+	if task.TaskType == Map {
+		mu.Lock()
+		if !m.MapTasks[task.TaskId].Finished {
+			m.MapTasks[task.TaskId].Finished = true
+			m.AvailableTaskCnt--
+			if m.AvailableTaskCnt == 0 {
+				m.MapTaskStatus = true
+			}
+		}
+		mu.Unlock()
+	} else if task.TaskType == Reduce {
+		mu.Lock()
+		if !m.ReduceTasks[task.TaskId].Finished {
+			m.ReduceTasks[task.TaskId].Finished = true
+			m.AvailableTaskCnt--
+			if m.AvailableTaskCnt == 0 {
+				m.ReduceTaskStatus = true
+			}
+		}
+		mu.Unlock()
+	}
+	if m.Check(task.NReduce) {
+		m.Status = Wait
+	}
 	return nil
+}
+
+func (m *Master) Check(NReduce int) bool {
+	if m.AvailableTaskCnt == 0 {
+		if !m.ReduceTaskStatus && len(m.MapChan) == 0 {
+			m.CreateReduceTask(NReduce)
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (m *Master) CreateReduceTask(NReduce int) {
+	for i := 0; i < NReduce; i++ {
+		task := Task{
+			TaskType:  Reduce,
+			FileName:  "mr-",
+			NMap:      len(m.MapTasks),
+			TaskId:    i,
+			Finished:  false,
+			ReduceId:  i,
+			timeStamp: time.Now(),
+		}
+		m.ReduceChan <- &task
+		m.ReduceTasks = append(m.ReduceTasks, &task)
+	}
+	m.Status = Reduce
+	m.AvailableTaskCnt = NReduce
 }
 
 func (m *Master) server() {
 	rpc.Register(m)
 	rpc.HandleHTTP()
-	//l, e := net.Listen("tcp", ":1234")
+	// l, e := net.Listen("tcp", ":1234")
 	sockname := masterSock()
 	os.Remove(sockname)
 	l, e := net.Listen("unix", sockname)
@@ -173,32 +138,35 @@ func (m *Master) server() {
 }
 
 func (m *Master) Done() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.done
+	return m.MapTaskStatus && m.ReduceTaskStatus
 }
 
-func (m *Master) tickSchedule() {
-	for !m.Done() {
-		go m.schedule()
-		time.Sleep(ScheduleInterval)
+func MakeMaster(files []string, NReduce int) *Master {
+	m := Master{
+		Status:           Map,
+		MapChan:          make(chan *Task, len(files)),
+		ReduceChan:       make(chan *Task, NReduce),
+		MapTasks:         make([]*Task, len(files)),
+		ReduceTasks:      make([]*Task, 0),
+		MapTaskStatus:    false,
+		ReduceTaskStatus: false,
+		AvailableTaskCnt: len(files),
 	}
-}
-
-func MakeMaster(files []string, nReduce int) *Master {
-	m := Master{}
-	m.mu = sync.Mutex{}
-	m.nReduce = nReduce
-	m.files = files
-	if nReduce > len(files) {
-		m.taskCh = make(chan Task, nReduce)
-	} else {
-		m.taskCh = make(chan Task, len(m.files))
+	i := 0
+	for _, file := range files {
+		task := Task{
+			TaskType:  Map,
+			FileName:  file,
+			NReduce:   NReduce,
+			TaskId:    i,
+			Finished:  false,
+			MapId:     i,
+			timeStamp: time.Now(),
+		}
+		m.MapChan <- &task
+		m.MapTasks[i] = &task
+		i++
 	}
-
-	m.initMapTask()
-	go m.tickSchedule()
 	m.server()
-	DPrintf("master init")
 	return &m
 }

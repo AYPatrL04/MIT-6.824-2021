@@ -1,66 +1,39 @@
 package mr
 
 import (
-	"fmt"
-	"log"
 	"os"
+	"strconv"
+	"sync"
+	"time"
 )
-import "strconv"
 
-type TaskPhase int
+var mu sync.Mutex
+
+type Args struct {
+	Status int
+}
+
+type Reply struct {
+	Status int
+}
 
 const (
-	MapPhase    TaskPhase = 0
-	ReducePhase TaskPhase = 1
+	Done   = 0
+	Map    = 1
+	Reduce = 2
+	Wait   = 3
 )
-const Debug = false
-
-func DPrintf(format string, v ...interface{}) {
-	if Debug {
-		log.Printf(format+"\n", v...)
-	}
-}
 
 type Task struct {
-	FileName string
-	NReduce  int
-	NMaps    int
-	Seq      int
-	Phase    TaskPhase
-	Alive    bool // worker should exit when alive is false
-}
-
-func reduceName(mapIdx, reduceIdx int) string {
-	return fmt.Sprintf("mr-%d-%d", mapIdx, reduceIdx)
-}
-
-func mergeName(reduceIdx int) string {
-	return fmt.Sprintf("mr-out-%d", reduceIdx)
-}
-
-type TaskArgs struct {
-	WorkerId int
-}
-
-type TaskReply struct {
-	Task *Task
-}
-
-type ReportTaskArgs struct {
-	Done     bool
-	Seq      int
-	Phase    TaskPhase
-	WorkerId int
-}
-
-type ReportTaskReply struct {
-}
-
-type RegisterArgs struct {
-}
-
-type RegisterReply struct {
-	WorkerId int
+	TaskId    int
+	TaskType  int
+	FileName  string
+	NMap      int
+	NReduce   int
+	Finished  bool
+	MapId     int
+	ReduceId  int
+	timeStamp time.Time
 }
 
 func masterSock() string {
