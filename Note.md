@@ -2,6 +2,54 @@
 <h5 align="center">AYPatrL04</h5>
 <h5 align="center">AYPatrL04@gmail.com</h5>
 
+- [Introduction](#introduction)
+  - [Labs](#labs)
+  - [Focus on infrastructure, not application.](#focus-on-infrastructure-not-application)
+  - [Main topics:](#main-topics)
+  - [Context](#context)
+- [Abstract view](#abstract-view)
+  - [Fault Tolerance](#fault-tolerance)
+    - [Other failures](#other-failures)
+- [Threads \& RPC (Go)](#threads--rpc-go)
+  - [Thread of execution](#thread-of-execution)
+    - [Definition](#definition)
+    - [Why threads?](#why-threads)
+    - [Thread challenges](#thread-challenges)
+    - [Go and challenges](#go-and-challenges)
+    - [Crawler](#crawler)
+      - [Serial](#serial)
+      - [ConcurrentMutex](#concurrentmutex)
+      - [ConcurrentChannel](#concurrentchannel)
+    - [RPC: Remote Procedure Call](#rpc-remote-procedure-call)
+    - [RPC semantics under failures](#rpc-semantics-under-failures)
+- [GFS: Google File System](#gfs-google-file-system)
+  - [Storage](#storage)
+      - [High performance](#high-performance)
+      - [Many servers](#many-servers)
+      - [Fault tolerance](#fault-tolerance-1)
+      - [Replication](#replication)
+      - [Strong consistency](#strong-consistency)
+  - [Consistency](#consistency)
+      - [Concurrency](#concurrency)
+      - [Failures](#failures)
+  - [GFS](#gfs)
+  - [GFS Data Read Procedure](#gfs-data-read-procedure)
+  - [GFS Master](#gfs-master)
+  - [GFS File Read Procedure](#gfs-file-read-procedure)
+  - [GFS File Write Procedure](#gfs-file-write-procedure)
+  - [GFS Consistency](#gfs-consistency)
+- [Primary/Backup Replication](#primarybackup-replication)
+  - [Failures](#failures-1)
+  - [Challenge](#challenge)
+  - [Dealing with backup operations (2 approaches)](#dealing-with-backup-operations-2-approaches)
+  - [Level of operations to replicate (RSM)](#level-of-operations-to-replicate-rsm)
+  - [VM-FT: Exploit virtualization](#vm-ft-exploit-virtualization)
+  - [Divergence sources](#divergence-sources)
+  - [VM-FT interruptions handling](#vm-ft-interruptions-handling)
+  - [VM-FT non-deterministic instructions handling](#vm-ft-non-deterministic-instructions-handling)
+  - [VM-FT failover handling](#vm-ft-failover-handling)
+  - [VM-FT Performance](#vm-ft-performance)
+
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
 # Introduction
@@ -631,7 +679,7 @@ A mapper can read data from GFS(thousands of disks) at a speed of 10,000 MB/s wh
 
 ## GFS Master
 
-#### Works:
+**Works:**
 
 - Maintain the mapping relationship between files and chunks. (Usually stored in memory such that Master can respond quickly)
 - Maintain the version of each chunk handle.
@@ -688,9 +736,8 @@ A mapper can read data from GFS(thousands of disks) at a speed of 10,000 MB/s wh
 
 **There are situations that the append operation failed that the primary has stored the data, and a certain secondaries has not. In this case, the Client will receive an error message, and the client will retry the append operation. This is the Do At-Least-Once.**
 
-### If append operation failed, and the client retries the operation, will the offset be the same with the previous?
-
-- No. Primary will choose a new offset to store the data. Assume a primary and 2 secondaries, the previous operation might be successful for p and s1 while failed for s2, and the retry operation needs to store the data to a new offset, at which it might be successful (situations and solutions vary).
+- If append operation failed, and the client retries the operation, will the offset be the same with the previous?
+  - No. Primary will choose a new offset to store the data. Assume a primary and 2 secondaries, the previous operation might be successful for p and s1 while failed for s2, and the retry operation needs to store the data to a new offset, at which it might be successful (situations and solutions vary).
 
 Here the replicates records can be duplicated. For an append operation to a certain data, an ID will be bound to the data, and if same ID is found, the second one will be discarded. Meanwhile, the change of data will be checked by checksums and ensure the data would not be modified.
 
@@ -710,9 +757,8 @@ Assume that we pick a new P, and the old P is still alive. This is called the sp
 
 Thus, here M knows the expiration of the lease, and will wait till its expiration before picking a new P to maintain the consistency.
 
-### How to get stronger consistency?
-
-- Update all P + S or none. (Similar to Transactions)
+- How to get stronger consistency?
+  - Update all P + S or none. (Similar to Transactions)
 
 Google has built other systems to ensure the consistency of the data, such as Spanner. Here GFS is for running MapReduce, and the consistency is not the top priority.
 
@@ -809,7 +855,7 @@ Assume that there is a storage server outside and connected to the VM-FTs throug
 
 When primary and backup occurs the network partition problem while they are still able to communicate with the storage server, they will assume that the opposite machine is down, and trying to act as the new primary to change the flag in storage through the test-and-set (sets a new value and returns the original value) atomic operation, and whoever finished the operation in advance will be marked as new primary. The latter one will receive the changed value and realize that it is the latter one, and give up becoming primary (terminate itself).
 
-- When is the flag be initialed?
+- When is the flag initialed?
   - Firstly a primary is started, and a backup is started for backup. Then a repair plan is needed to guarantee that if primary fails, the backup can take its place. In VM-FT, the repair plan is executed manually by monitor software. It creates a new replica based on the VM image, and when the backup started and finished the backup, the flag is reset according to the protocol. 
 - What will happen if the logging channel or the channel the client used to access the server breaks?
   - If the channel broke, the server will no longer serve the client as long as primary and backup themselves work well, and nothing can be done except wait until the network being repaired.
