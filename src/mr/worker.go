@@ -124,8 +124,7 @@ func Reducer(reducef func(string, []string) string, task *Task) error {
 		for {
 			var kv KeyValue
 			if err := dec.Decode(&kv); err != nil {
-				log.Fatalf("decode error")
-				return err
+				break
 			}
 			if _, ok := maps[kv.Key]; !ok {
 				maps[kv.Key] = make([]string, 0, 100)
