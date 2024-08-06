@@ -49,11 +49,15 @@ func Worker(mapf func(string, string) []KeyValue,
 		if GetTask(&task) {
 			switch task.TaskType {
 			case Map:
-				Mapper(mapf, &task)
-				FinishTask(&task)
+				err := Mapper(mapf, &task)
+				if err == nil {
+					FinishTask(&task)
+				}
 			case Reduce:
-				Reducer(reducef, &task)
-				FinishTask(&task)
+				err := Reducer(reducef, &task)
+				if err == nil {
+					FinishTask(&task)
+				}
 			case Wait:
 				time.Sleep(time.Second)
 				flag = true
@@ -76,15 +80,17 @@ func GetTask(reply *Task) bool {
 	return call("Master.AllocateTask", &args, reply)
 }
 
-func Mapper(mapf func(string, string) []KeyValue, task *Task) {
+func Mapper(mapf func(string, string) []KeyValue, task *Task) error {
 	fileName := task.FileName
 	file, err := os.Open(fileName)
 	if err != nil {
 		log.Fatalf("cannot open %v", fileName)
+		return err
 	}
 	content, err := ioutil.ReadAll(file)
 	if err != nil {
 		log.Fatalf("cannot read %v", fileName)
+		return err
 	}
 	file.Close()
 	kva := mapf(fileName, string(content))
@@ -98,7 +104,7 @@ func Mapper(mapf func(string, string) []KeyValue, task *Task) {
 		f, err := os.Create(oname)
 		if err != nil {
 			log.Fatalf("cannot create %v", oname)
-			return
+			return err
 		}
 		enc := json.NewEncoder(f)
 		for _, kv := range kvs {
@@ -106,9 +112,10 @@ func Mapper(mapf func(string, string) []KeyValue, task *Task) {
 		}
 		f.Close()
 	}
+	return nil
 }
 
-func Reducer(reducef func(string, []string) string, task *Task) {
+func Reducer(reducef func(string, []string) string, task *Task) error {
 	maps := make(map[string][]string)
 	for i := 0; i < task.NMap; i++ {
 		fileName := fmt.Sprintf("mr-%d-%d", i, task.ReduceId)
@@ -117,7 +124,8 @@ func Reducer(reducef func(string, []string) string, task *Task) {
 		for {
 			var kv KeyValue
 			if err := dec.Decode(&kv); err != nil {
-				break
+				log.Fatalf("decode error")
+				return err
 			}
 			if _, ok := maps[kv.Key]; !ok {
 				maps[kv.Key] = make([]string, 0, 100)
@@ -132,7 +140,9 @@ func Reducer(reducef func(string, []string) string, task *Task) {
 	}
 	if err := ioutil.WriteFile(oname, []byte(strings.Join(res, "")), 0600); err != nil {
 		log.Fatalf("fail to write %v", oname)
+		return err
 	}
+	return nil
 }
 
 func FinishTask(task *Task) {

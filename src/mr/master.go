@@ -112,7 +112,6 @@ func (m *Master) CreateReduceTask(NReduce int) {
 	for i := 0; i < NReduce; i++ {
 		task := Task{
 			TaskType:  Reduce,
-			FileName:  "mr-",
 			NMap:      len(m.MapTasks),
 			TaskId:    i,
 			Finished:  false,
@@ -161,13 +160,12 @@ func MakeMaster(files []string, NReduce int) *Master {
 	i := 0
 	for _, file := range files {
 		task := Task{
-			TaskType:  Map,
-			FileName:  file,
-			NReduce:   NReduce,
-			TaskId:    i,
-			Finished:  false,
-			MapId:     i,
-			timeStamp: time.Now(),
+			TaskType: Map,
+			FileName: file,
+			NReduce:  NReduce,
+			TaskId:   i,
+			Finished: false,
+			MapId:    i,
 		}
 		m.MapChan <- &task
 		m.MapTasks[i] = &task
