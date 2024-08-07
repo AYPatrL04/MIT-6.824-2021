@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -8,6 +9,8 @@ import (
 )
 
 var mu sync.Mutex
+
+const DEBUG = false
 
 type Args struct {
 	Status int
@@ -34,6 +37,12 @@ type Task struct {
 	MapId     int
 	ReduceId  int
 	timeStamp time.Time
+}
+
+func DPrintf(format string, v ...interface{}) {
+	if DEBUG {
+		log.Printf(format+"\n", v...)
+	}
 }
 
 func masterSock() string {
