@@ -49,6 +49,19 @@
   - [VM-FT non-deterministic instructions handling](#vm-ft-non-deterministic-instructions-handling)
   - [VM-FT failover handling](#vm-ft-failover-handling)
   - [VM-FT Performance](#vm-ft-performance)
+- [Fault Tolerance: Raft  (1)](#fault-tolerance-raft--1)
+  - [Single point of failure](#single-point-of-failure)
+  - [Split-brain](#split-brain)
+  - [Majority rule](#majority-rule)
+  - [Protocols using quorums](#protocols-using-quorums)
+  - [RSM with Raft](#rsm-with-raft)
+  - [Log usage of Raft](#log-usage-of-raft)
+  - [Log entry of Raft](#log-entry-of-raft)
+  - [Election](#election)
+  - [Split vote](#split-vote)
+  - [Election Timeout](#election-timeout)
+  - [Vote storage](#vote-storage)
+  - [Log diverge](#log-diverge)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -865,7 +878,7 @@ When primary and backup occurs the network partition problem while they are stil
 ## Divergence sources
 
 - Non-deterministic instructions
-  - E.g. the instruction to get the time as it is hard to assure that the primary and backup execute in the same time, and the received values are usually different
+  - E.g. the instruction to get the time as it is hard to ensure that the primary and backup execute in the same time, and the received values are usually different
 - Input packets / timer interruptions
   - E.g. the interrupters might be inserted into the instructions stream between 1st and 2nd instructions of primary while between 2nd and 3rd instructions of backup, which might result in the inconsistent states between primary and backup in following operations. So the interruptions are supposed to be delivered at the same point in the instruction streams.
 - Multi-core
@@ -887,7 +900,7 @@ It firstly scans through all the non-deterministic instructions in Linux before 
 
 E.g. Primary had a counter as 10, and client sent a request `inc` to increase it to 11, and the primary did it but failed right before sending response to the client. If backup handled it now by sync to the instruction from logging channel, the `inc` operation did not executed by backup. If the client sent the `inc` request again, what it will get is 11 rather that 12.
 
-To prevent the above situations, VM-FT made an **Output Rule**. Before primary sending response to client, it will send message to backup through logging channel. When backup received the message and did the same operations, it will send `ack` message to primary (similar to TCP). Only after primary received the `ack` and assured that backup can have the same state will it send response to client.
+To prevent the above situations, VM-FT made an **Output Rule**. Before primary sending response to client, it will send message to backup through logging channel. When backup received the message and did the same operations, it will send `ack` message to primary (similar to TCP). Only after primary received the `ack` and ensured that backup can have the same state will it send response to client.
 
 The output rule can be seen in any kind of replication systems (e.g. raft or zookeper).
 
@@ -902,3 +915,168 @@ The output rule can be seen in any kind of replication systems (e.g. raft or zoo
 According to the statistics from the paper, the performance keeps a rate of 0.94~0.99 comparing with non-FT when running at primary/backup situations, while if the network transmit and receive with huge amount of data, the performance declines apparently with a decline rate of nearly 30\%. The reason might be that primary needs to send the data to the backup and wait until backup processed all the data can it sends response to the client.
 
 This explains why poeple prefers to use RSM on application-level rather than instruction-level. However, they usually need to modify the application if use RSM on application-level like GFS.
+
+**All the works done here is never for higher performance or efficiency, but only for a stronger consistency and partition tolerance. In other word, here only focus on the C and P in the traditional CAP theory.**
+
+<h6 align="center">======= Lec.05 Wed. 07 Aug. 2024 =======</h6>
+
+# Fault Tolerance: Raft  (1)
+
+One of the main components in Distributed Replication Protocol.
+
+## Single point of failure
+
+It happens when the **Coordinator(MapReduce) / Master(GFS) / Storage(VM-FT test-and-set)** fails.
+
+In these solutions, the single machine managements were applied rather that multi-instances / multi-machines for the purpose of avoiding the **Split-brain**.
+
+However, in most cases, the single point of failure is acceptable, as the failure rate of a single machine is much lower that multi-machines, and the cost to recover it is lower as well, which only need to wait a short period of time to restart.
+
+## Split-brain
+
+Suppose that there are 2 servers named S1 and S2.
+
+Now here is a client C1 want to become Primary, so it sends test-and-set request to both of the servers. And assume that S1 responses but S2 not due to some problems. Now C1 might just think it becomes the Primary.
+
+Here the reason why S2 made no responses might be:
+1. S2 failed / has down. Then there will be no problem that C1 becomes Primary as it would be like the single point situations.
+2. The network partition occurred between S2 and C1, and only C1 can not get access to S2. Then if there is another client C2 also sent a request to S1 and S2, though S1 would make a fail response, S2 would be success. If the protocol are not that well-considered, the system will appear 2 Primaries, which is known as Split-brain.
+
+To avoid the Split-brain problem, the network partition should firstly be solved.
+
+## Majority rule
+
+The majority here refers to that of all the machines in the systems, regardless of the state of each machine, if a client sent the test-and-set request to them, and there are more than half of the machines approved, than the client will be considered as Primary.
+
+E.g. 
+- 5 Machines, 3 Approved = Success, 2 Approved = Fail.
+- 4 Machines, 3 Approved = Success, 2 Approved = Fail.
+
+The majority rule can ensure the existence of the overlap between different clients, thus only 1 client can receive the support of majority.
+
+The Raft is mostly the same as:
+
+- If network partition happened, there will be at most 1 partition has majority, and only this partition can continue to work.
+- **If no partition had majority (e.g. 3 -> 1, 1, 1), the whole system will be unable to run.**
+- Assume a situation of $2x+1$ machines, then the number of machines that can down at the same time is at most $x$, as the rest of machines can still reach the number of $x+1>x$ and become majority.
+
+The client itself also perform as a server and will vote for itself. In Raft, the `candidates` will vote for themselves, and the `leader` will also vote and record itself.
+
+## Protocols using quorums
+Since 1990s, widely being used since 2000s:
+
+- Paxos
+- View-Stamped replication (VR)
+
+The Raft appears around 2014, and it can be used to implement a **Complete Replicated State Machine**
+
+## RSM with Raft
+
+The systems working normally be like:
+
+- Client sends query request to Leader.
+- Leader appends the request log to the end of Raft Sequential log.
+- Leader sync the added log records to other K/V machines through network.
+- Other machines append the log, respond `ACK` to Leader.
+- Leader receives the `ACK`, and Leader sends the operation log to its own K/V Application.
+- K/V Application does the K/V query, and send the result to Client after the Leader and `ACK`ed followers reach the majority amount.
+
+When error occurred:
+
+- Client sends request to Leader.
+- Leader syncs the log and receive the `ACK`.
+- Leader downs when responding to Client.
+- **Other machines elect a new Leader.**
+- Request time out, Client retries. **As the internal failover happened in the System, Client will request the new Leader.**
+- New Leader records the log and syncs it to other machines and get `ACK`.
+- New Leader responds to Client.
+
+Here the log of the rest of machines might have **duplicate** requests, and it is required to detect these requests.
+
+Similarly, Clients here are required to have the retry mechanism to prevent the possible log **loss**.
+
+In real system designs, the data will be sharded to multiple Raft instances with their own Leaders, thereby averaging the requests load to other machines.
+
+Clients have the access list of all servers. When old Leaders down, Clients will randomly resend the request to someone of these servers until success.
+
+## Log usage of Raft
+
+- Retransmission: The message might fail to be transmitted from Leader to Followers, and the log can help with retransmission.
+- Order: The operations need to be synced to all replicas should in same order.
+- Persistence: To support retransmissions, recoveries, etc..
+- Space tentative: When Followers received the log from Leader, they did not know which operations were committed, and needed to wait for a while until they were committed will they do the following operations. Here some spaces are needed for these tentative operations, which is suitable to use log.
+
+**The logs might be delayed sometimes in some Machines, but they will finally sync to and be identical to other servers.**
+
+## Log entry of Raft
+
+For every log entry:
+
+- Command (received instructions and operations): Ensure the logs are identical
+- Leader's term (in current system): Elect leaders periodically
+
+**Uncommitted log entries have the possibility to be overwritten.**
+
+## Election
+
+- Leader occurred network partition with followers.
+- Followers reelect as they missed the heartbeats of Leader and the election timer was timeout.
+  - When Leader did not receive new messages from Followers, it will still send heartbeat periodically to inform that it is still the Leader. It is a kind of append log, but will not be recorded. The messages carried by these kind of logs carry are various, like the length of the current log or what the last log entry should be like, and thus helps Followers to sync up to date.
+- Assume that the election timer of Follower 1 was timeout earliest. It increases its term count by 1, and launches the election, votes for itself, and request for vote from original Leader and other Followers.
+- Followers respond to the Follower 1, and the Leader does not due to network partition.
+- Follower 1 becomes new Leader.
+- Client does the failover and resends the request to new Leader, and same with the following requests.
+
+**If client still sent the request to the original Leader who recovered the connections with other original Followers:**
+
+- The original Leader receives the request from Client and tries to send log to other Followers.
+- The new Leader receives the log, and refuses to append it to its own logs, and replies the original Leader with new term count.
+- The original Leader will realize that it is no longer the Leader, and either becomes Follower or relaunch the election, but will not continue to serve as Leader. **Thus the Split-brain problem will not happen.**
+- Client will receive a failure or refuse to serve, and resend the request to the new Leader.
+
+## Split vote
+
+- The election timers of Follower 1 and Follower 2 are timeout at the same time by coincidence.
+- Both of them vote for themselves, and receive a reject from each other, and both failed to become majority or new Leader.
+- After the election timeout, they repeat the procedure above, and it might leads to dead loop.
+
+**To prevent such kind of dead loop, the election timeout is usually randomized.**
+
+According to the paper, the timer will be set to a random value from 150ms to 300ms, and there will be a time when the timer of one Follower has up while the other does not, and the Follower launchs a new election, reaches the majority, and becomes the new Leader.
+
+## Election Timeout
+
+During the election, the system status shows to the outside is blocking and can not respond to Client normally. Thus, the timeout should be a reasonable value such that have no effect to the normal works.
+
+- election timeout $>=$ few heartbeats
+  - If the election timeout is even shorter that heartbeat, then it will be too frequent to respond to Client or sync the logs, as the logs from old Leader are more likely to be rejected.
+- use random values for election timeout
+  - To prevent the infinite split vote problem. It should be not that small to reduce the possible split vote times, and not that big to maintain the service. Usually 150ms~300ms.
+
+## Vote storage
+
+Suppose that a Follower voted for itself, then down for a while, and recovered and voted for itself again, thus regardless of the votes of other Followers and became the Leader by itself.
+
+To prevent the situation above, the vote records for Followers along with current term counts should be stored stably by themselves, and make sure that each Follower votes only once, thus ensure that there will be only 1 Leader appeared.
+
+The machine does not need to record its previous state before voting. It will know whether it is Leader or Follower if the election continuing when it recovers, or simply relaunch an election and increase the term count otherwise.
+
+## Log diverge
+
+A possible log diverge situation:
+
+![Log Diverge Example](/images/Log_Diverge.png)
+
+Consider the (a) to (f) in the graph, assume that current Leader was down and has no possibility to recover.
+
+(b), (e), (f) : Excluded for too small term count logs, as **larger term count server will reject the request from those smaller**.
+
+Here each of (a), (c), (d) has the possibility to become the leader generally. And for Raft, it has own restrictions to prevent the confusion:
+
+- The server can only vote for candidates if its last log of term count:
+  - is strictly larger than local;
+  - is equal to local and its log length is larger than or equal to local.
+
+Leader election rule:
+- Majority
+- At-least-up-to-date: **the server should have the newest term**
