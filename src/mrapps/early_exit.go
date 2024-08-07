@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"MIT6-824-2021/mr"
+	"MIT-6_824-2021/mr"
 )
 
 // The map function is called once for each file of input.

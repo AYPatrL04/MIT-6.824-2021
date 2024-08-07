@@ -7,7 +7,7 @@ package main
 //
 
 import "fmt"
-import "MIT6-824-2021/mr"
+import "MIT-6_824-2021/mr"
 import "plugin"
 import "os"
 import "log"

@@ -1,6 +1,6 @@
 package main
 
-import "MIT6-824-2021/mr"
+import "MIT-6_824-2021/mr"
 import "time"
 import "os"
 import "fmt"

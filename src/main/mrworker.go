@@ -10,7 +10,7 @@ package main
 // Please do not change this file.
 //
 
-import "MIT6-824-2021/mr"
+import "MIT-6_824-2021/mr"
 import "plugin"
 import "os"
 import "fmt"

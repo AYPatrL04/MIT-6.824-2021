@@ -1,6 +1,6 @@
 package models
 
-import "MIT6-824-2021/porcupine"
+import "MIT-6_824-2021/porcupine"
 import "fmt"
 import "sort"
 

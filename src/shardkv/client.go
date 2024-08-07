@@ -8,10 +8,10 @@ package shardkv
 // talks to the group that holds the key's shard.
 //
 
-import "MIT6-824-2021/labrpc"
+import "MIT-6_824-2021/labrpc"
 import "crypto/rand"
 import "math/big"
-import "MIT6-824-2021/shardctrler"
+import "MIT-6_824-2021/shardctrler"
 import "time"
 
 // which shard is a key in?

@@ -958,7 +958,7 @@ The Raft is mostly the same as:
 
 - If network partition happened, there will be at most 1 partition has majority, and only this partition can continue to work.
 - **If no partition had majority (e.g. 3 -> 1, 1, 1), the whole system will be unable to run.**
-- Assume a situation of $2x+1$ machines, then the number of machines that can down at the same time is at most $x$, as the rest of machines can still reach the number of $x+1>x$ and become majority.
+- Assume a situation of <math>2x+1</math> machines, then the number of machines that can down at the same time is at most <math>x</math>, as the rest of machines can still reach the number of <math>x+1 > x</math> and become majority.
 
 The client itself also perform as a server and will vote for itself. In Raft, the `candidates` will vote for themselves, and the `leader` will also vote and record itself.
 
@@ -1048,7 +1048,7 @@ According to the paper, the timer will be set to a random value from 150ms to 30
 
 During the election, the system status shows to the outside is blocking and can not respond to Client normally. Thus, the timeout should be a reasonable value such that have no effect to the normal works.
 
-- election timeout $>=$ few heartbeats
+- election timeout <math>>=</math> few heartbeats
   - If the election timeout is even shorter that heartbeat, then it will be too frequent to respond to Client or sync the logs, as the logs from old Leader are more likely to be rejected.
 - use random values for election timeout
   - To prevent the infinite split vote problem. It should be not that small to reduce the possible split vote times, and not that big to maintain the service. Usually 150ms~300ms.

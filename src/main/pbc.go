@@ -18,7 +18,7 @@ package main
 // and restart them to exercise fault tolerance.
 //
 
-import "MIT6-824-2021/pbservice"
+import "MIT-6_824-2021/pbservice"
 import "os"
 import "fmt"
 

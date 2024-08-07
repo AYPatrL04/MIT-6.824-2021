@@ -4,7 +4,7 @@ package main
 // see comments in lockd.go
 //
 
-import "MIT6-824-2021/lockservice"
+import "MIT-6_824-2021/lockservice"
 import "os"
 import "fmt"
 

@@ -5,7 +5,7 @@ package main
 //
 
 import "time"
-import "MIT6-824-2021/pbservice"
+import "MIT-6_824-2021/pbservice"
 import "os"
 import "fmt"
 

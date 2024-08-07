@@ -16,7 +16,7 @@ package main
 //   -r restart
 
 import "time"
-import "MIT6-824-2021/diskv"
+import "MIT-6_824-2021/diskv"
 import "os"
 import "fmt"
 import "strconv"
