@@ -5,8 +5,8 @@ Personal notes on the course [MIT 6.824: Distributed Systems](https://pdos.csail
 ## LABS
 
 - [x] Lab 1 
-- [ ] Lab 2A
-- [ ] Lab 2B
+- [x] Lab 2A
+- [x] Lab 2B
 - [ ] Lab 2C
 - [ ] Lab 2D
 - [ ] Lab 3A
