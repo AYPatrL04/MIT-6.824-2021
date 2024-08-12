@@ -14,13 +14,13 @@ const (
 	Candidate = 1
 	Leader    = 2
 
-	ApplyInterval       = time.Millisecond * 50
+	ApplyInterval       = time.Millisecond * 60
 	HBInterval          = time.Millisecond * 100
-	ElectionBaseTimeout = time.Millisecond * 500
+	ElectionBaseTimeout = time.Millisecond * 800
 )
 
 func ElectionTimeout() time.Duration {
-	return ElectionBaseTimeout + time.Duration(rand.Int63())%(ElectionBaseTimeout-1)
+	return ElectionBaseTimeout + time.Duration(rand.Int63())%ElectionBaseTimeout
 }
 
 // as each Raft peer becomes aware that successive log entries are
@@ -287,7 +287,6 @@ func (rf *Raft) StartElection() {
 					if votes > len(rf.peers)/2 {
 						rf.state = Leader
 						rf.matchIndex = make([]int, len(rf.peers))
-						//rf.matchIndex[rf.me] = len(rf.logs) - 1
 						rf.matchIndex[rf.me] = 0
 						rf.nextIndex = make([]int, len(rf.peers))
 						for i := range rf.nextIndex {
@@ -416,6 +415,13 @@ func (rf *Raft) leaderApplier() {
 					rf.votedFor = -1
 					rf.mu.Unlock()
 					return
+				} else if reply.CurrentTerm == rf.currentTerm {
+					if reply.UpToIdx != -1 {
+						rf.nextIndex[i] = reply.UpToIdx + 1
+						rf.matchIndex[i] = reply.UpToIdx
+					} else {
+						rf.nextIndex[i]--
+					}
 				}
 				rf.mu.Unlock()
 				if reply.Success {
@@ -446,17 +452,6 @@ func (rf *Raft) leaderApplier() {
 							}
 							break
 						}
-					}
-					rf.mu.Unlock()
-				} else {
-					rf.mu.Lock()
-					if reply.UpToIdx != -1 {
-						rf.nextIndex[i] = reply.UpToIdx + 1
-					}
-					if reply.CurrentTerm > rf.currentTerm {
-						rf.currentTerm = reply.CurrentTerm
-						rf.state = Follower
-						rf.votedFor = -1
 					}
 					rf.mu.Unlock()
 				}
@@ -493,9 +488,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 			if args.LastLogIndex == 0 {
 				if len(args.Entries) > 0 {
-					rf.logs = append(rf.logs, args.Entries...)
-				} else {
-					rf.logs = append(rf.logs[1:], args.Entries...)
+					rf.logs = append(rf.logs[:1], args.Entries...)
 				}
 			} else {
 				rf.logs = append(rf.logs, args.Entries[conflictIdx:]...)
@@ -532,7 +525,7 @@ func (rf *Raft) committer() {
 		rf.mu.Unlock()
 		for _, msg := range appliedMsg {
 			rf.applyCh <- msg
-			//fmt.Printf("Server %d applied %v\n", rf.me, msg)
+			//fmt.Printf("Server %d applied command %v at index %d\n", rf.me, msg.Command, msg.CommandIndex)
 		}
 	}
 }
