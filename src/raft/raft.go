@@ -386,10 +386,10 @@ func (rf *Raft) leaderApplier() {
 				LastCommitIdx: rf.commitIndex,
 			}
 			if rf.nextIndex[i] < len(rf.logs) {
-				if rf.nextIndex[i] > 0 {
+				if rf.nextIndex[i] > rf.matchIndex[i] {
 					args.Entries = append([]Entry(nil), rf.logs[rf.nextIndex[i]:]...)
 				} else {
-					args.Entries = append([]Entry(nil), rf.logs[rf.nextIndex[i]+1:]...)
+					args.Entries = append([]Entry(nil), rf.logs[rf.matchIndex[i]+1:]...)
 				}
 			}
 			if lastLogTerm < rf.currentTerm {
@@ -405,17 +405,20 @@ func (rf *Raft) leaderApplier() {
 			if nextI == 0 || ((!(args.Entries == nil || len(args.Entries) == 0)) && logLen > nextI) {
 				rf.peers[i].Call("Raft.AppendEntries", &args, &reply)
 				rf.mu.Lock()
-				defer rf.mu.Unlock()
 				if rf.state != Leader {
+					rf.mu.Unlock()
 					return
 				}
 				if reply.CurrentTerm > rf.currentTerm {
 					rf.currentTerm = reply.CurrentTerm
 					rf.state = Follower
 					rf.votedFor = -1
+					rf.mu.Unlock()
 					return
 				}
+				rf.mu.Unlock()
 				if reply.Success {
+					rf.mu.Lock()
 					rf.matchIndex[i] = args.LastLogIndex + len(args.Entries)
 					rf.nextIndex[i] = rf.matchIndex[i] + 1
 					for j := len(rf.logs) - 1; j > rf.commitIndex; j-- {
@@ -440,10 +443,18 @@ func (rf *Raft) leaderApplier() {
 							break
 						}
 					}
+					rf.mu.Unlock()
 				} else {
+					rf.mu.Lock()
 					if reply.UpToIdx != -1 {
 						rf.nextIndex[i] = reply.UpToIdx + 1
 					}
+					if reply.CurrentTerm > rf.currentTerm {
+						rf.currentTerm = reply.CurrentTerm
+						rf.state = Follower
+						rf.votedFor = -1
+					}
+					rf.mu.Unlock()
 				}
 			}
 		}(i)
@@ -471,16 +482,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	} else {
 		if len(args.Entries) > 0 {
 			var tmpEntry []Entry
-			copy(tmpEntry, rf.logs[args.LastLogIndex+1:])
+			copy(tmpEntry, rf.logs[args.LastLogIndex:])
 			conflictIdx := rf.findConflictIndex(tmpEntry, args.Entries)
 			if conflictIdx+args.LastLogIndex+1 < len(rf.logs) {
 				rf.logs = rf.logs[:conflictIdx+args.LastLogIndex+1]
 			}
-			rf.logs = append(rf.logs, args.Entries[conflictIdx:]...)
+			if args.LastLogIndex == 0 {
+				if len(args.Entries) > 0 {
+					rf.logs = append(rf.logs, args.Entries...)
+				} else {
+					rf.logs = append(rf.logs[1:], args.Entries...)
+				}
+			} else {
+				rf.logs = append(rf.logs, args.Entries[conflictIdx:]...)
+			}
 		}
 		reply.UpToIdx = len(rf.logs) - 1
 	}
-	rf.persist()
 }
 
 func (rf *Raft) findConflictIndex(logs []Entry, entries []Entry) int {
@@ -496,27 +514,22 @@ func (rf *Raft) findConflictIndex(logs []Entry, entries []Entry) int {
 
 func (rf *Raft) committer() {
 	for rf.killed() == false {
-		time.Sleep(time.Millisecond * 20)
-		//var appliedMsg []ApplyMsg
+		time.Sleep(ApplyInterval)
+		var appliedMsg []ApplyMsg
 		rf.mu.Lock()
 		for rf.commitIndex > rf.lastApplied && rf.lastApplied < len(rf.logs)-1 {
 			rf.lastApplied++
-			//appliedMsg = append(appliedMsg, ApplyMsg{
-			//	CommandValid: true,
-			//	Command:      rf.logs[rf.lastApplied].Command,
-			//	CommandIndex: rf.lastApplied,
-			//})
-			rf.applyCh <- ApplyMsg{
+			appliedMsg = append(appliedMsg, ApplyMsg{
 				CommandValid: true,
 				Command:      rf.logs[rf.lastApplied].Command,
 				CommandIndex: rf.lastApplied,
-			}
+			})
 		}
 		rf.mu.Unlock()
-		//for _, msg := range appliedMsg {
-		//	rf.applyCh <- msg
-		//	//fmt.Printf("Server %d apply %v\n", rf.me, msg.Command)
-		//}
+		for _, msg := range appliedMsg {
+			rf.applyCh <- msg
+			//fmt.Printf("Server %d applied %v\n", rf.me, msg)
+		}
 	}
 }
 
