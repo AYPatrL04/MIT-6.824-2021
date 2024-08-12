@@ -14,13 +14,13 @@ const (
 	Candidate = 1
 	Leader    = 2
 
-	ApplyInterval       = time.Millisecond * 100
-	HBInterval          = time.Millisecond * 200
-	ElectionBaseTimeout = time.Millisecond * 800
+	ApplyInterval       = time.Millisecond * 50
+	HBInterval          = time.Millisecond * 100
+	ElectionBaseTimeout = time.Millisecond * 500
 )
 
 func ElectionTimeout() time.Duration {
-	return ElectionBaseTimeout + time.Duration(rand.Int63())%ElectionBaseTimeout
+	return ElectionBaseTimeout + time.Duration(rand.Int63())%(ElectionBaseTimeout-1)
 }
 
 // as each Raft peer becomes aware that successive log entries are
@@ -287,7 +287,8 @@ func (rf *Raft) StartElection() {
 					if votes > len(rf.peers)/2 {
 						rf.state = Leader
 						rf.matchIndex = make([]int, len(rf.peers))
-						rf.matchIndex[rf.me] = len(rf.logs) - 1
+						//rf.matchIndex[rf.me] = len(rf.logs) - 1
+						rf.matchIndex[rf.me] = 0
 						rf.nextIndex = make([]int, len(rf.peers))
 						for i := range rf.nextIndex {
 							rf.nextIndex[i] = len(rf.logs)
@@ -435,8 +436,11 @@ func (rf *Raft) leaderApplier() {
 							for idx := 0; idx < len(rf.peers); idx++ {
 								if idx != rf.me {
 									go func(idx int) {
+										rf.mu.Lock()
 										var rep int
-										rf.peers[idx].Call("Raft.ReceiveCommit", &rf.commitIndex, &rep)
+										commitIndex := rf.commitIndex
+										rf.mu.Unlock()
+										rf.peers[idx].Call("Raft.ReceiveCommit", &commitIndex, &rep)
 									}(idx)
 								}
 							}
