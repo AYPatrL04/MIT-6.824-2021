@@ -525,7 +525,6 @@ func (rf *Raft) committer() {
 		rf.mu.Unlock()
 		for _, msg := range appliedMsg {
 			rf.applyCh <- msg
-			//fmt.Printf("Server %d applied command %v at index %d\n", rf.me, msg.Command, msg.CommandIndex)
 		}
 	}
 }

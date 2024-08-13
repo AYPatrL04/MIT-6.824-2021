@@ -24,6 +24,6 @@ There are 4 cases that needed to reset the election time to prevent `warning: te
 - Test (2B): rejoin of partitioned leader
   - The committed logs can no longer be overwritten by the leader. To prevent such case, the server suffered from network partition should become Follower and update its logs first.
 - Test (2B): leader backs up quickly over incorrect follower logs
-  - No idea on `apply error: commit index=52`, just pray for that.
+  - The previous Leader when reconnected and had not updated its state yet while received the log from Clients, it should first renew its state and then decide whether to append the logs or not.
 - Test (2B): RPC counts aren't too high
   - Make the timeouts longer to reduce RPC counts.
