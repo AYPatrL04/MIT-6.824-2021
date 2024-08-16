@@ -16,7 +16,7 @@ const (
 	Candidate = 1
 	Leader    = 2
 
-	ApplyInterval       = time.Millisecond * 60
+	ApplyInterval       = time.Millisecond * 80
 	HBInterval          = time.Millisecond * 100
 	ElectionBaseTimeout = time.Millisecond * 800
 )
@@ -81,9 +81,6 @@ func (rf *Raft) GetState() (int, bool) {
 	return rf.currentTerm, rf.state == Leader
 }
 
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
 func (rf *Raft) persist() {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -96,9 +93,8 @@ func (rf *Raft) persist() {
 	rf.persister.SaveRaftState(data)
 }
 
-// restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+	if data == nil || len(data) < 1 {
 		return
 	}
 	r := bytes.NewBuffer(data)
@@ -459,17 +455,17 @@ func (rf *Raft) leaderApplier() {
 							for idx := 0; idx < len(rf.peers); idx++ {
 								if idx != rf.me {
 									go func(idx int) {
-										received := false
+										//received := false
 										commitIndex := rf.commitIndex
-										for !received {
-											rf.mu.Lock()
-											var rep int
-											rf.mu.Unlock()
-											rf.peers[idx].Call("Raft.ReceiveCommit", &commitIndex, &rep)
-											if rep == 1 {
-												received = true
-											}
-										}
+										//for !received {
+										rf.mu.Lock()
+										var rep int
+										rf.mu.Unlock()
+										rf.peers[idx].Call("Raft.ReceiveCommit", &commitIndex, &rep)
+										//if rep == 1 {
+										//	received = true
+										//}
+										//}
 									}(idx)
 								}
 							}
@@ -548,15 +544,9 @@ func (rf *Raft) findConflictIndex(logs []Entry, entries []Entry) int {
 func (rf *Raft) committer() {
 	for rf.killed() == false {
 		time.Sleep(ApplyInterval)
-		//var appliedMsg []ApplyMsg
 		rf.mu.Lock()
 		for rf.commitIndex > rf.lastApplied && rf.lastApplied < len(rf.logs)-1 {
 			rf.lastApplied++
-			//appliedMsg = append(appliedMsg, ApplyMsg{
-			//	CommandValid: true,
-			//	Command:      rf.logs[rf.lastApplied].Command,
-			//	CommandIndex: rf.lastApplied,
-			//})
 			appliedMsg := ApplyMsg{
 				CommandValid: true,
 				Command:      rf.logs[rf.lastApplied].Command,
@@ -569,10 +559,6 @@ func (rf *Raft) committer() {
 		}
 		rf.persist()
 		rf.mu.Unlock()
-		//for _, msg := range appliedMsg {
-		//	rf.applyCh <- msg
-		//}
-		//rf.persist()
 	}
 }
 
