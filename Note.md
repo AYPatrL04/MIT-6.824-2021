@@ -62,6 +62,16 @@
   - [Election Timeout](#election-timeout)
   - [Vote storage](#vote-storage)
   - [Log diverge](#log-diverge)
+- [Fault Tolerance: Raft (2)](#fault-tolerance-raft-2)
+  - [Leader election rule:](#leader-election-rule)
+  - [Log catchup](#log-catchup)
+  - [Erasing log entries](#erasing-log-entries)
+  - [Log catch up quickly](#log-catch-up-quickly)
+  - [Persistence](#persistence)
+    - [States needed to be persisted:](#states-needed-to-be-persisted)
+  - [Service Recovery](#service-recovery)
+  - [Using Raft](#using-raft)
+  - [Linearizability / Strong Consistency](#linearizability--strong-consistency)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -1077,6 +1087,89 @@ Here each of (a), (c), (d) has the possibility to become the leader generally. A
   - is strictly larger than local;
   - is equal to local and its log length is larger than or equal to local.
 
-Leader election rule:
+
+<h6 align="center">======= Lec.07 Fri. 16 Aug. 2024 =======</h6>
+
+# Fault Tolerance: Raft (2)
+
+- Log divergence
+- Log catchup
+- Persistence
+- Snapshots
+- Linearizability
+
+## Leader election rule:
+
 - Majority
 - At-least-up-to-date: **the server should have the newest term**
+
+## Log catchup
+
+- NextIndex: the index of the next log entry to send to the server. It is usually optimistic, which refers to that it is initialized to the length of the log of the Leader, such that the leader will think its log is the newest.
+- MatchIndex: the index of the last log entry that the server has replicated. It is usually pessimistic, which refers to that it is initialized to 0, such that the server will think it has no log.
+
+When the Leader sends the log to the server, it will send the log from NextIndex to the end of the log, and the server will compare the log with its own log from MatchIndex to the end of the log, and if the logs are the same, the server will increase the MatchIndex to the end of the log, and if not, the server will decrease the NextIndex and try again.
+
+## Erasing log entries
+
+The server who committed an earlier log and pulled a `log catch up` will erase the possible newer logs in other servers, and the logs will be replaced by the logs from the server.
+
+## Log catch up quickly
+
+- Leader sent its logs to Follower with term at `nextIndex = 6`, assume that it is 7;
+- Follower received the data, found its term at `index = 5` is 5, so it sent back the reject message with its first log at term 5, assume that it is 2;
+- Leader received the reject message, and decreased the `nextIndex` to 2, and sent the logs from 2 to 7 to Follower;
+- Follower received the logs, and found that the logs at term 4 are the same, so it replace the later logs with the logs from Leader.
+
+## Persistence
+
+Consider the things happened/needed to be done when rebooting the system:
+
+1. a server rebooted, rejoin the cluster and replay the logs.
+2. a server rebooted from its persistence state(last snapshot), and catch up the logs from the Leader.
+
+It is preferred to use the snapshot to recover the system, as it is much faster than replaying the logs. In this case, we need to know which of the state should be stored stably.
+
+The states needed to be persisted whenever any of which changed.
+
+### States needed to be persisted:
+
+- voteFor: the server can only vote once in a term.
+- currentTerm: the term count of the server, which should guarantee that it is monotonic increasing.
+- log: the logs of the server, to promise that the committed logs will not be withdrawn.
+
+## Service Recovery
+
+Similarly, there are 2 strategies to recover the service:
+
+1. Replay the logs: too costly.
+2. Periodic snapshots
+
+Be mindful that:
+
+- the version of the snapshots should be newer than current states.
+- the newer logs should still be saved after the snapshots, and be kept when reloading from the snapshots.
+
+## Using Raft
+
+1. Applications integrate the packages of Raft.
+2. Applications receive requests from Clients.
+3. Applications call `start` of Raft.
+4. Raft syncs the logs and do the operations.
+5. Raft returns the results to Applications through apply channel.
+6. Applications send the results to Clients.
+
+Clients should keep a list of all the servers, and when the Leader failed, it should retry the request to another server.
+
+Due to the possible failed requests or resending requests, the Clients should be able to handle the duplicate requests. Usually the Clients will send the request with a unique ID, and the Servers will check the ID to avoid the duplicate requests. The server used to keep these IDs is called `Clerk`.
+
+`Clerk` is an RPC library, and it is used to ensure the list of RPC servers. If it thinks server1 is Leader, it will send the request to server1, and if server1 failed, it will retry the request to server2, and remark each request (get, put, ...) and generate a unique ID for each request to prevent the duplicate requests.
+
+## Linearizability / Strong Consistency
+
+1. total order of operations
+   - though operations happened concurrently, the results should be the same as if they happened in a certain order.
+2. match real time
+   - the operations should be done in a certain time, if op1 was done before op2 started, then op1 should be put before op2 in the logs.
+3. read return results of the latest write
+   - if a read operation happened after a write operation, the read operation should return the result of the write operation.
