@@ -1,6 +1,8 @@
 package raft
 
 import (
+	"MIT-6_824-2021/labgob"
+	"bytes"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -83,14 +85,15 @@ func (rf *Raft) GetState() (int, bool) {
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.logs)
+	e.Encode(rf.commitIndex)
+	e.Encode(rf.lastApplied)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
@@ -98,19 +101,26 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var logs []Entry
+	var commitIndex int
+	var lastApplied int
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&logs) != nil ||
+		d.Decode(&commitIndex) != nil ||
+		d.Decode(&lastApplied) != nil {
+		panic("readPersist error")
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.logs = logs
+		rf.commitIndex = commitIndex
+		rf.lastApplied = lastApplied
+	}
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -185,6 +195,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.electionTimer.Reset(ElectionTimeout())
 	reply.VoteGranted = true
 	reply.CurrentTerm = rf.currentTerm
+	rf.persist()
 }
 
 func (rf *Raft) ValidLog(lastLogTerm, lastLogIndex int) bool {
@@ -243,6 +254,7 @@ func (rf *Raft) ticker() {
 			rf.mu.Lock()
 			rf.state = Candidate
 			rf.currentTerm++
+			rf.persist()
 			rf.StartElection()
 			rf.electionTimer.Reset(ElectionTimeout())
 			rf.mu.Unlock()
@@ -266,6 +278,7 @@ func (rf *Raft) StartElection() {
 	}
 	votes := 1
 	rf.votedFor = rf.me
+	rf.persist()
 	for i := range rf.peers {
 		if i != rf.me {
 			go func(i int) {
@@ -286,6 +299,9 @@ func (rf *Raft) StartElection() {
 					votes++
 					if votes > len(rf.peers)/2 {
 						rf.state = Leader
+						rf.votedFor = -1
+						rf.leaderId = rf.me
+						rf.persist()
 						rf.matchIndex = make([]int, len(rf.peers))
 						rf.matchIndex[rf.me] = 0
 						rf.nextIndex = make([]int, len(rf.peers))
@@ -414,6 +430,7 @@ func (rf *Raft) leaderApplier() {
 					rf.state = Follower
 					rf.votedFor = -1
 					rf.mu.Unlock()
+					rf.persist()
 					return
 				} else if reply.CurrentTerm == rf.currentTerm {
 					if reply.UpToIdx != -1 {
@@ -442,14 +459,21 @@ func (rf *Raft) leaderApplier() {
 							for idx := 0; idx < len(rf.peers); idx++ {
 								if idx != rf.me {
 									go func(idx int) {
-										rf.mu.Lock()
-										var rep int
+										received := false
 										commitIndex := rf.commitIndex
-										rf.mu.Unlock()
-										rf.peers[idx].Call("Raft.ReceiveCommit", &commitIndex, &rep)
+										for !received {
+											rf.mu.Lock()
+											var rep int
+											rf.mu.Unlock()
+											rf.peers[idx].Call("Raft.ReceiveCommit", &commitIndex, &rep)
+											if rep == 1 {
+												received = true
+											}
+										}
 									}(idx)
 								}
 							}
+							rf.persist()
 							break
 						}
 					}
@@ -465,8 +489,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 	if args.Term < rf.currentTerm {
 		reply.Success = false
-		reply.CurrentTerm = rf.currentTerm
-		reply.UpToIdx = -1
+		latestTerm := 1
+		latestIdx := -1
+		for i := 0; i < len(rf.logs); i++ {
+			if rf.logs[i].Term <= args.Term {
+				latestIdx = i - 1
+				latestTerm = rf.logs[i].Term
+			} else if rf.logs[i].Term > args.Term {
+				break
+			}
+		}
+		reply.CurrentTerm = latestTerm
+		reply.UpToIdx = latestIdx
 		return
 	}
 	reply.Success = true
@@ -475,9 +509,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.state = Follower
 	rf.currentTerm = args.Term
 	rf.votedFor = -1
+	rf.persist()
 	if args.LastLogIndex > len(rf.logs)-1 {
 		reply.Success = false
-		reply.UpToIdx = args.LastLogIndex
+		reply.UpToIdx = len(rf.logs) - 1
 	} else {
 		if len(args.Entries) > 0 {
 			var tmpEntry []Entry
@@ -495,6 +530,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 		}
 		reply.UpToIdx = len(rf.logs) - 1
+		rf.persist()
 	}
 }
 
@@ -512,20 +548,31 @@ func (rf *Raft) findConflictIndex(logs []Entry, entries []Entry) int {
 func (rf *Raft) committer() {
 	for rf.killed() == false {
 		time.Sleep(ApplyInterval)
-		var appliedMsg []ApplyMsg
+		//var appliedMsg []ApplyMsg
 		rf.mu.Lock()
 		for rf.commitIndex > rf.lastApplied && rf.lastApplied < len(rf.logs)-1 {
 			rf.lastApplied++
-			appliedMsg = append(appliedMsg, ApplyMsg{
+			//appliedMsg = append(appliedMsg, ApplyMsg{
+			//	CommandValid: true,
+			//	Command:      rf.logs[rf.lastApplied].Command,
+			//	CommandIndex: rf.lastApplied,
+			//})
+			appliedMsg := ApplyMsg{
 				CommandValid: true,
 				Command:      rf.logs[rf.lastApplied].Command,
 				CommandIndex: rf.lastApplied,
-			})
+			}
+			rf.mu.Unlock()
+			rf.applyCh <- appliedMsg
+			rf.mu.Lock()
+			rf.persist()
 		}
+		rf.persist()
 		rf.mu.Unlock()
-		for _, msg := range appliedMsg {
-			rf.applyCh <- msg
-		}
+		//for _, msg := range appliedMsg {
+		//	rf.applyCh <- msg
+		//}
+		//rf.persist()
 	}
 }
 
@@ -534,7 +581,9 @@ func (rf *Raft) ReceiveCommit(args *int, reply *int) {
 	defer rf.mu.Unlock()
 	if *args > rf.commitIndex {
 		rf.commitIndex = *args
+		rf.persist()
 	}
+	*reply = 1
 }
 
 func Make(peers []*labrpc.ClientEnd, me int,
