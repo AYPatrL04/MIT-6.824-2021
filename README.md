@@ -6,8 +6,8 @@ Personal notes on the course [MIT 6.824: Distributed Systems](https://pdos.csail
 
 - [x] Lab 1 (Pass rate: 100%)
 - [x] Lab 2A (Pass rate: 100%)
-- [x] Lab 2B (Pass rate: 100%)
-- [x] Lab 2C
+- [x] Lab 2B (Pass rate: 97%+)
+- [x] Lab 2C (Pass rate: 80%+)
 - [ ] Lab 2D
 - [ ] Lab 3A
 - [ ] Lab 3B
