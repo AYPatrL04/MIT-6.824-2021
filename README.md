@@ -21,10 +21,10 @@ Personal notes on the course [MIT 6.824: Distributed Systems](https://pdos.csail
 - [x] Lec 03
 - [x] Lec 04
 - [x] Lec 05
-- [x] Lec 06 (Lab1 Q&A no lec)
+- [x] Lec 06 (Lab1 Q&A)
 - [x] Lec 07
-- [ ] Lec 08
-- [ ] Lec 09
+- [x] Lec 08 (Lab2A&2B Q&A)
+- [x] Lec 09
 - [ ] Lec 10
 - [ ] Lec 11
 - [ ] Lec 12
