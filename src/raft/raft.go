@@ -16,8 +16,8 @@ const (
 	Candidate = 1
 	Leader    = 2
 
-	ApplyInterval       = time.Millisecond * 15
-	HBInterval          = time.Millisecond * 35
+	ApplyInterval       = time.Millisecond * 5
+	HBInterval          = time.Millisecond * 33
 	ElectionBaseTimeout = time.Millisecond * 100
 )
 

@@ -7,6 +7,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const Debug = false
@@ -19,9 +20,12 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	OpType   string
+	Key      string
+	Value    string
+	ClientId int64
+	SeqId    int
+	LogIdx   int
 }
 
 type KVServer struct {
@@ -33,15 +37,135 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
-	// Your definitions here.
+	clientSeqMap map[int64]int
+	kvStore      map[string]string
+	applyChMap   map[int]chan Op
+
+	//lastIncludedIndex int
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	if kv.killed() {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	_, Leader := kv.rf.GetState()
+	if !Leader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	op := Op{
+		OpType:   "Get",
+		Key:      args.Key,
+		ClientId: args.ClientId,
+		SeqId:    args.SeqId,
+	}
+	lastIdx, _, _ := kv.rf.Start(op)
+	ch := kv.getChannel(lastIdx)
+	defer func() {
+		kv.mu.Lock()
+		delete(kv.applyChMap, op.LogIdx)
+		kv.mu.Unlock()
+	}()
+	timeout := time.NewTicker(100 * time.Millisecond)
+	defer timeout.Stop()
+	select {
+	case replyMsg := <-ch:
+		if replyMsg.ClientId == op.ClientId && replyMsg.SeqId == op.SeqId {
+			kv.mu.Lock()
+			reply.Value = kv.kvStore[args.Key]
+			kv.mu.Unlock()
+			reply.Err = OK
+			return
+		} else {
+			reply.Err = ErrWrongLeader
+		}
+	case <-timeout.C:
+		reply.Err = ErrWrongLeader
+	}
+}
+
+func (kv *KVServer) getChannel(index int) chan Op {
+	kv.mu.Lock()
+	if _, ok := kv.applyChMap[index]; !ok {
+		kv.applyChMap[index] = make(chan Op, 1)
+	}
+	ch := kv.applyChMap[index]
+	kv.mu.Unlock()
+	return ch
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	if kv.killed() {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	_, Leader := kv.rf.GetState()
+	if !Leader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	op := Op{
+		OpType:   args.Op,
+		Key:      args.Key,
+		Value:    args.Value,
+		ClientId: args.ClientId,
+		SeqId:    args.SeqId,
+	}
+	lastIdx, _, _ := kv.rf.Start(op)
+	ch := kv.getChannel(lastIdx)
+	defer func() {
+		kv.mu.Lock()
+		delete(kv.applyChMap, lastIdx)
+		kv.mu.Unlock()
+	}()
+	timeout := time.NewTicker(100 * time.Millisecond)
+	select {
+	case replyMsg := <-ch:
+		if replyMsg.ClientId == op.ClientId && replyMsg.SeqId == op.SeqId {
+			reply.Err = OK
+			return
+		} else {
+			reply.Err = ErrWrongLeader
+		}
+	case <-timeout.C:
+		reply.Err = ErrWrongLeader
+	}
+	defer timeout.Stop()
+}
+
+func (kv *KVServer) applyMsgHandler() {
+	for {
+		if kv.killed() {
+			return
+		}
+		select {
+		case msg := <-kv.applyCh:
+			idx := msg.CommandIndex
+			op := msg.Command.(Op)
+			if !kv.duplicateOp(op.ClientId, op.SeqId) {
+				kv.mu.Lock()
+				switch op.OpType {
+				case "Put":
+					kv.kvStore[op.Key] = op.Value
+				case "Append":
+					kv.kvStore[op.Key] += op.Value
+				}
+				kv.clientSeqMap[op.ClientId] = op.SeqId
+				kv.mu.Unlock()
+			}
+			kv.getChannel(idx) <- op
+		}
+	}
+}
+
+func (kv *KVServer) duplicateOp(clientId int64, seqId int) bool {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if lastSeqId, ok := kv.clientSeqMap[clientId]; ok {
+		return seqId <= lastSeqId
+	}
+	return false
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -90,6 +214,14 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
-
+	kv.clientSeqMap = make(map[int64]int)
+	kv.kvStore = make(map[string]string)
+	kv.applyChMap = make(map[int]chan Op)
+	//kv.lastIncludedIndex = -1
+	//snapshot := persister.ReadSnapshot()
+	//if len(snapshot) > 0 {
+	//	kv.DecodeSnapShot(snapshot)
+	//}
+	go kv.applyMsgHandler()
 	return kv
 }
