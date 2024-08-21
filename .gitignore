@@ -2,7 +2,7 @@ pkg/
 api.key
 .api.key.trimmed
 *-handin.tar.gz
-src/raft/test.py
+src/*/test.py
 # MacOS
 .DS_Store
 #VSCode

@@ -17,7 +17,7 @@ const (
 	Leader    = 2
 
 	ApplyInterval       = time.Millisecond * 5
-	HBInterval          = time.Millisecond * 33
+	HBInterval          = time.Millisecond * 15
 	ElectionBaseTimeout = time.Millisecond * 100
 )
 
@@ -50,6 +50,7 @@ type Raft struct {
 	votedFor    int
 	logs        []LogEntry
 	grantedVote int
+	newLog      int
 
 	commitIndex int
 	lastApplied int
@@ -207,9 +208,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 func (rf *Raft) applier() {
+	retry := 0
 	for rf.killed() == false {
-		time.Sleep(HBInterval)
 		rf.mu.Lock()
+		if rf.newLog == 0 && retry < 4 {
+			rf.mu.Unlock()
+			time.Sleep(HBInterval)
+			retry++
+			continue
+		}
+		retry = 0
+		rf.newLog = 0
 		if rf.state == Leader {
 			rf.mu.Unlock()
 			rf.leaderApplier()
@@ -382,11 +391,26 @@ func (rf *Raft) persist() {
 func (rf *Raft) persistData() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.votedFor)
-	e.Encode(rf.logs)
-	e.Encode(rf.lastIncludedIndex)
-	e.Encode(rf.lastIncludedTerm)
+	err := e.Encode(rf.currentTerm)
+	if err != nil {
+		return nil
+	}
+	err = e.Encode(rf.votedFor)
+	if err != nil {
+		return nil
+	}
+	err = e.Encode(rf.logs)
+	if err != nil {
+		return nil
+	}
+	err = e.Encode(rf.lastIncludedIndex)
+	if err != nil {
+		return nil
+	}
+	err = e.Encode(rf.lastIncludedTerm)
+	if err != nil {
+		return nil
+	}
 	data := w.Bytes()
 	return data
 }
@@ -529,6 +553,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Command: command,
 	})
 	rf.persist()
+	rf.newLog++
 	return index, term, true
 }
 
@@ -560,6 +585,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		votedFor:          -1,
 		logs:              make([]LogEntry, 1),
 		grantedVote:       0,
+		newLog:            0,
 		electionTimer:     time.NewTimer(ElectionTimeout()),
 		matchIndex:        make([]int, len(peers)),
 		nextIndex:         make([]int, len(peers)),
