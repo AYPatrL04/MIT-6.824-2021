@@ -51,10 +51,16 @@ func (rf *Raft) restoreLogTerm(index int) int {
 	if index == rf.lastIncludedIndex {
 		return rf.lastIncludedTerm
 	}
+	if len(rf.logs) < index-rf.lastIncludedIndex {
+		return -1
+	}
 	return rf.logs[index-rf.lastIncludedIndex].Term
 }
 
 func (rf *Raft) restoreLog(curIndex int) LogEntry {
+	if curIndex == rf.lastIncludedIndex {
+		return LogEntry{Term: rf.lastIncludedTerm, Command: nil}
+	}
 	return rf.logs[curIndex-rf.lastIncludedIndex]
 }
 
@@ -62,4 +68,8 @@ func (rf *Raft) ValidLog(lastLogTerm, lastLogIndex int) bool {
 	lastIdx := rf.getLastIndex()
 	lastTerm := rf.getLastTerm()
 	return lastLogTerm > lastTerm || (lastLogTerm == lastTerm && lastLogIndex >= lastIdx)
+}
+
+func (rf *Raft) GetStateSize() int {
+	return rf.persister.RaftStateSize()
 }
