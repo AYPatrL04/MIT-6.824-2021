@@ -11,7 +11,6 @@ const (
 
 type Err string
 
-// Put or Append
 type PutAppendArgs struct {
 	Key      string
 	Value    string

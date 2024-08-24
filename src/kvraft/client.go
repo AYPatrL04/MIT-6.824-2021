@@ -34,8 +34,8 @@ func (ck *Clerk) Get(key string) string {
 	ck.SeqId++
 	args := GetArgs{Key: key, ClientId: ck.ClientId, SeqId: ck.SeqId}
 	serverId := ck.LeaderId
-	reply := GetReply{}
 	for {
+		reply := GetReply{}
 		ok := ck.servers[serverId].Call("KVServer.Get", &args, &reply)
 		if ok {
 			switch reply.Err {
@@ -58,8 +58,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	ck.SeqId++
 	args := PutAppendArgs{Key: key, Value: value, Op: op, ClientId: ck.ClientId, SeqId: ck.SeqId}
 	serverId := ck.LeaderId
-	reply := PutAppendReply{}
 	for {
+		reply := PutAppendReply{}
 		ok := ck.servers[serverId].Call("KVServer.PutAppend", &args, &reply)
 		if ok {
 			switch reply.Err {
