@@ -82,3 +82,9 @@ Test (2B): RPC counts aren't too high ...
 Test: ops complete fast enough (3A) ...
   ... Passed --  20.5 seconds (about 20 ms/op)
 ```
+
+## 3B
+
+Similar to 2C/2D, just implement the Persisting and Decoding functions. Might need to scan through the whole procedure to prevent deadlocks.
+
+The possible errors occurred during testing might can be fixed by making all operations strictly linearizable. //TODO
