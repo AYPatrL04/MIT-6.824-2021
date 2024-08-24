@@ -74,10 +74,24 @@
   - [Linearizability / Strong Consistency](#linearizability--strong-consistency)
 - [Zookeeper](#zookeeper)
   - [Zookeeper is a Replicated State Machine](#zookeeper-is-a-replicated-state-machine)
-  - [Zookeper throughput](#zookeper-throughput)
+  - [Zookeeper throughput](#zookeeper-throughput)
   - [Linearizability](#linearizability)
   - [ZNode API](#znode-api)
   - [Summary](#summary)
+- [Patterns and Hints for Concurrency in Go](#patterns-and-hints-for-concurrency-in-go)
+- [Chain Replication](#chain-replication)
+  - [Zookeeper lock](#zookeeper-lock)
+  - [Approaches to build Replicated State Machines](#approaches-to-build-replicated-state-machines)
+    - [1. Run all operations through Raft / Paxos (used in Lab 3)](#1-run-all-operations-through-raft--paxos-used-in-lab-3)
+    - [2. Configuration manager + Primary / Backup replication (more common)](#2-configuration-manager--primary--backup-replication-more-common)
+  - [Overview](#overview)
+  - [Crash](#crash)
+    - [Head crashed (Easiest)](#head-crashed-easiest)
+    - [Middle crashed (More complex)](#middle-crashed-more-complex)
+    - [Tail crashed (Relatively easy)](#tail-crashed-relatively-easy)
+  - [Add replica](#add-replica)
+  - [Chain Replication vs. Raft](#chain-replication-vs-raft)
+  - [Extension for read parallelism](#extension-for-read-parallelism)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -87,7 +101,7 @@
 1) MapReduce
 2) Replication Using Raft
 3) Replicated Key-Value Service
-4) Sharded Key-Value Service
+4) Shard Key-Value Service
 
 ## Focus on infrastructure, not application.
 - Storage
@@ -109,10 +123,10 @@
 - Goal: easy for non-experts to use.
 - Approach: 
   - map functions + reduce functions => sequential code
-  - mapreduce deals with distribution
+  - MapReduce deals with distribution
 
 # Abstract view
-**Mapreduce**: an idea come from functional programming.
+**MapReduce**: an idea come from functional programming.
 ```markdown
      f1     f2    f3
 map   |      |     |
@@ -152,7 +166,7 @@ func reducer(key string, values []Pair) int {
 1. The input file firstly is split into few pieces.
 2. The schedulers run `worker` processes on a set of machines, calling `Map` and `Reduce` functions when appropriate.
 3. The `master` process assign tasks to the workers.
-4. The `Map` workers read the input files, and turn them into a list of key/value pairs (store intermediate key/value files on local disks).
+4. The `Map` workers read the input files, and turn them into a list of key / value pairs (store intermediate key / value files on local disks).
 5. The `Reduce` workers read the intermediate files (might need network communications to retrieve files), merge them into lists of values as output.
 
 Expensive: shuffle
@@ -197,7 +211,7 @@ There are other status like:
 ### Why threads?
 
 - Express concurrency
-  - I/O concurrency
+  - I / O concurrency
   - Multi-core parallelism
   - Convenience
 
@@ -805,7 +819,7 @@ Google has built other systems to ensure the consistency of the data, such as Sp
 
 ## Failures
 
-Common failure scenaries:
+Common failure scenarios:
 
 - Fail-Stop failures: infrastructure failure or components of the computer does not work well and eventually stops the computer.
 - Logic bugs, configuration errors
@@ -817,10 +831,10 @@ Here we assume that there are no errors with the system and softwares, no logica
 ## Challenge
 
 - Has primary failed?
-  - the machine might fail to visite the primary due to network partition or machine failed, and in this case some strategies should be applied in adavance to avoid the co-existence of 2 primaries (assume that there are only 1 primary allowed).
+  - the machine might fail to visit the primary due to network partition or machine failed, and in this case some strategies should be applied in advance to avoid the co-existence of 2 primaries (assume that there are only 1 primary allowed).
 - Split brain system
   - if each partition of networks has its own primary, and clients interact with these primaries, there might be huge difference in data, version, etc., and if the system restart, we have to handle it by ourselves (similar to the handling of git merge).
-- Keep primary/backup in sync
+- Keep primary / backup in sync
   - if primary failed, the backup should be able to handle the work of the primary, which requires the backup to sync to the newest primary when primary updated.
   - apply changes in order
   - avoid non-determinism: same changes should be consistent for primary and backup.
@@ -843,10 +857,10 @@ GFS also applied the 2nd approach (RSM). See [GFS File Write Procedure](#gfs-fil
 ## Level of operations to replicate (RSM)
 
 - Application-level operations 
-  - Such as GFS file append or write. If using RSM on aplication-level operations, the semantics of these operations should also be known by RSM, and it should know how to deal with these operations. <ins>if applying a RSM approach on the kind of application-level, <strong>the Application Itself</strong> should be modified to perform or play part of the RSM approach</ins>
+  - Such as GFS file append or write. If using RSM on application-level operations, the semantics of these operations should also be known by RSM, and it should know how to deal with these operations. <ins>if applying a RSM approach on the kind of application-level, <strong>the Application Itself</strong> should be modified to perform or play part of the RSM approach</ins>
 - Machine-level operations
   - The state here refers to the state of registers or memories, and the operations are traditional computer instructions. In this level, the RSM only focus on the most basic machine instructions rather than applications or operation systems.
-  - A traditional way of applying machine-level operations is to buy those machines or processors that support replicate/backup itselves, but it is usually expansive.
+  - A traditional way of applying machine-level operations is to buy those machines or processors that support replicate / backup themselves, but it is usually expansive.
   - Instead of hardware replication, Virtual Machine can be used here.
 
 ## VM-FT: Exploit virtualization
@@ -876,9 +890,9 @@ The virtual replication is transparent to applications, and appears to clients a
 When interruption happens, the VM-FT act as Hypervisor will receive the signal of interruption, and it will:
 
 1. send the interruption signal to a backup computer over a logging channel
-2. send the interruction signal to the actual VM, like the Linux VM running on guest space as shown in the graph.
+2. send the interruption signal to the actual VM, like the Linux VM running on guest space as shown in the graph.
 
-Similarly, when client send packets to primary and the hardware of primary occurred interruptions, VM-FT will send the interruption to backup through logging channel, and send it to the current VM. The VM then writes the data to the virtual network card in VM-FT, and the VM-FT will write the data to the physical network card to send off the response to the client. Meanwhile, the backup also receives the interrption send by the primary VM-FT, but it will do nothing when its virtual network card received the data.
+Similarly, when client send packets to primary and the hardware of primary occurred interruptions, VM-FT will send the interruption to backup through logging channel, and send it to the current VM. The VM then writes the data to the virtual network card in VM-FT, and the VM-FT will write the data to the physical network card to send off the response to the client. Meanwhile, the backup also receives the interruption send by the primary VM-FT, but it will do nothing when its virtual network card received the data.
 
 Assume that there is a storage server outside and connected to the VM-FTs through network, the storage use a flag to record the state of primary and backup, and who is primary.
 
@@ -910,7 +924,7 @@ To arrange this, the backup needs to lag behind one message.
 
 ## VM-FT non-deterministic instructions handling
 
-It firstly scans through all the non-deterministic instructions in Linux before starting the guest spaceor boot to the VM, and makes sure that they are transferred into invalid instructions. When guest space executing these non-deterministic instructions, it transfers control to the hypervisor through the trap, and the hypervisor will emulate to execute the instruction, and record the result to a certain register and send it back. The backup will execute this instruction and trap into kernel as well, and it will wait until primary syncs the result of the instruction, thus achieve the same result on this non-deterministic instruction.
+It firstly scans through all the non-deterministic instructions in Linux before starting the guest space or boot to the VM, and makes sure that they are transferred into invalid instructions. When guest space executing these non-deterministic instructions, it transfers control to the hypervisor through the trap, and the hypervisor will emulate to execute the instruction, and record the result to a certain register and send it back. The backup will execute this instruction and trap into kernel as well, and it will wait until primary syncs the result of the instruction, thus achieve the same result on this non-deterministic instruction.
 
 ## VM-FT failover handling
 
@@ -918,7 +932,7 @@ E.g. Primary had a counter as 10, and client sent a request `inc` to increase it
 
 To prevent the above situations, VM-FT made an **Output Rule**. Before primary sending response to client, it will send message to backup through logging channel. When backup received the message and did the same operations, it will send `ack` message to primary (similar to TCP). Only after primary received the `ack` and ensured that backup can have the same state will it send response to client.
 
-The output rule can be seen in any kind of replication systems (e.g. raft or zookeper).
+The output rule can be seen in any kind of replication systems (e.g. raft or zookeeper).
 
 **As it is a network request from client, though it is a deterministic instruction, it is needed to inform backup and wait for the `ack` message before respond to client.**
 
@@ -928,9 +942,9 @@ The output rule can be seen in any kind of replication systems (e.g. raft or zoo
 
 **As most of VM-FT operations based on level of machine instructions or level of interruptions, the performance paid a hit.**
 
-According to the statistics from the paper, the performance keeps a rate of 0.94~0.99 comparing with non-FT when running at primary/backup situations, while if the network transmit and receive with huge amount of data, the performance declines apparently with a decline rate of nearly 30\%. The reason might be that primary needs to send the data to the backup and wait until backup processed all the data can it sends response to the client.
+According to the statistics from the paper, the performance keeps a rate of 0.94 ~ 0.99 comparing with non-FT when running at primary / backup situations, while if the network transmit and receive with huge amount of data, the performance declines apparently with a decline rate of nearly 30\%. The reason might be that primary needs to send the data to the backup and wait until backup processed all the data can it sends response to the client.
 
-This explains why poeple prefers to use RSM on application-level rather than instruction-level. However, they usually need to modify the application if use RSM on application-level like GFS.
+This explains why people prefers to use RSM on application-level rather than instruction-level. However, they usually need to modify the application if use RSM on application-level like GFS.
 
 **All the works done here is never for higher performance or efficiency, but only for a stronger consistency and partition tolerance. In other word, here only focus on the C and P in the traditional CAP theory.**
 
@@ -992,10 +1006,10 @@ The systems working normally be like:
 
 - Client sends query request to Leader.
 - Leader appends the request log to the end of Raft Sequential log.
-- Leader sync the added log records to other K/V machines through network.
+- Leader sync the added log records to other K / V machines through network.
 - Other machines append the log, respond `ACK` to Leader.
 - Leader receives the `ACK`, and Leader sends the operation log to its own K/V Application.
-- K/V Application does the K/V query, and send the result to Client after the Leader and `ACK`ed followers reach the majority amount.
+- K / V Application does the K / V query, and send the result to Client after the Leader and `ACK`ed followers reach the majority amount.
 
 When error occurred:
 
@@ -1011,7 +1025,7 @@ Here the log of the rest of machines might have **duplicate** requests, and it i
 
 Similarly, Clients here are required to have the retry mechanism to prevent the possible log **loss**.
 
-In real system designs, the data will be sharded to multiple Raft instances with their own Leaders, thereby averaging the requests load to other machines.
+In real system designs, the data will be split to multiple Raft instances (shards) with their own Leaders, thereby averaging the requests load to other machines.
 
 Clients have the access list of all servers. When old Leaders down, Clients will randomly resend the request to someone of these servers until success.
 
@@ -1041,7 +1055,7 @@ For every log entry:
 - Assume that the election timer of Follower 1 was timeout earliest. It increases its term count by 1, and launches the election, votes for itself, and request for vote from original Leader and other Followers.
 - Followers respond to the Follower 1, and the Leader does not due to network partition.
 - Follower 1 becomes new Leader.
-- Client does the failover and resends the request to new Leader, and same with the following requests.
+- Clients do the failover and resend the request to new Leader, and same with the following requests.
 
 **If client still sent the request to the original Leader who recovered the connections with other original Followers:**
 
@@ -1058,7 +1072,7 @@ For every log entry:
 
 **To prevent such kind of dead loop, the election timeout is usually randomized.**
 
-According to the paper, the timer will be set to a random value from 150ms to 300ms, and there will be a time when the timer of one Follower has up while the other does not, and the Follower launchs a new election, reaches the majority, and becomes the new Leader.
+According to the paper, the timer will be set to a random value from 150ms to 300ms, and there will be a time when the timer of one Follower has up while the other does not, and the Follower launches a new election, reaches the majority, and becomes the new Leader.
 
 ## Election Timeout
 
@@ -1067,7 +1081,7 @@ During the election, the system status shows to the outside is blocking and can 
 - election timeout <math>>=</math> few heartbeats
   - If the election timeout is even shorter that heartbeat, then it will be too frequent to respond to Client or sync the logs, as the logs from old Leader are more likely to be rejected.
 - use random values for election timeout
-  - To prevent the infinite split vote problem. It should be not that small to reduce the possible split vote times, and not that big to maintain the service. Usually 150ms~300ms.
+  - To prevent the infinite split vote problem. It should be not that small to reduce the possible split vote times, and not that big to maintain the service. Usually 150ms ~ 300ms.
 
 ## Vote storage
 
@@ -1129,7 +1143,7 @@ The server who committed an earlier log and pulled a `log catch up` will erase t
 
 ## Persistence
 
-Consider the things happened/needed to be done when rebooting the system:
+Consider the things happened / needed to be done when rebooting the system:
 
 1. a server rebooted, rejoin the cluster and replay the logs.
 2. a server rebooted from its persistence state(last snapshot), and catch up the logs from the Leader.
@@ -1198,7 +1212,7 @@ Coordination service
 Similar to Raft, Zookeeper serves as:
 
 1. Clients visit Zookeeper, create ZNodes,
-2. Zookeeper calls ZAB(similar to Raft library), generates operation logs, ZAB uses a way similar to Raft to make the cluster work, including log syncronize, heartbeats, etc...
+2. Zookeeper calls ZAB(similar to Raft library), generates operation logs, ZAB uses a way similar to Raft to make the cluster work, including log synchronize, heartbeats, etc...
    - ZAB:
      - maintains the order of the logs
      - prevents the network partition and split-brain problems
@@ -1210,7 +1224,7 @@ ZNode is a tree structure.
 
 As ZAB is similar to Raft, here the lecture focus on Zookeeper.
 
-## Zookeper throughput
+## Zookeeper throughput
 
 If there are more write operations, then the throughput is lower,
 
@@ -1234,7 +1248,7 @@ Assume a situation with 3 servers:
   - `1`: C2 read from L1 or F1 with newest `x`
   - `0`: C2 read from F2 with old `x`
 
-From the above situation, we can find that **the read/write of Zookeeper is not Linearizability**, as it is not fit with the 2nd and 3rd requirements mentioned in [Linearizability / Strong Consistency](#linearizability--strong-consistency)
+From the above situation, we can find that **the read / write of Zookeeper is not Linearizability**, as it is not fit with the 2nd and 3rd requirements mentioned in [Linearizability / Strong Consistency](#linearizability--strong-consistency)
 
 Here can also make the read operation is linear though, with some additional strategies.
 
@@ -1251,7 +1265,7 @@ When Client wants to connect to the Zookeeper, it will create a session, which i
 
 Assume that Client sends a `write` request, and generated the `zxid=1` at Leader and Follower F1. After that, it sends a `read` request with `zxid=0` (generated by previous write operation) to Follower F2 who has the log with `zxid=0` but no `zxid=1`, it will still respond to Client with the log of `zxid=0`. However, if F2 had the log with `zxid=1`, it will send the newer log back.
 
-Zookeeper has a `watch` mechanism. Here `watch` is like a trigger in a certain ZNode. Once the ZNode modified, Client requested the `watch` will receive an asynchronization notification, and do the correspond operations such as resending the R/W requests.
+Zookeeper has a `watch` mechanism. Here `watch` is like a trigger in a certain ZNode. Once the ZNode modified, Client requested the `watch` will receive an asynchronization notification, and do the correspond operations such as resending the R / W requests.
 
 ## ZNode API
 
@@ -1276,3 +1290,142 @@ APIs:
 - Weaker consistency
 - Suitable to be used as configuration (thanks to the APIs)
 - High performance
+
+<h6 align="center">======= Lec.10 Fri. 23 Aug. 2024 =======</h6>
+
+# Patterns and Hints for Concurrency in Go
+
+This part simply explained some possible implementation and optimization methods in Go, and how to improve the readability and etc. of the code. Skipped.
+
+<h6 align="center">======= Lec.11 Sat. 24 Aug. 2024 =======</h6>
+
+# Chain Replication
+
+## Zookeeper lock
+
+By using the linearizablity rule of `write` of Zookeeper, we can implement a simple lock mechanism:
+
+1. Client tries to `create` an EPHEMERAL ZNode, if success, then it gets the lock.
+2. If the ZNode already exists, then the Client will wait until the ZNode is deleted by `watch` mechanism, and then try to send the `create` request again.
+3. To unlock, the Client simply `delete` the ZNode.
+
+Here although Client might crash after getting the lock, the ZNode will be deleted after the session ends (EPHEMERAL), and the lock will be released. The Zookeeper and Client will send heartbeats to each other through session, and if the Client crashed / network partition, the Zookeeper will delete the ZNode after the session ends.
+
+However, the above mechanism is not suitable for the situation that many Clients want to get the lock at the same time, as the Clients will be blocked by the `watch` mechanism, and the unhandled requests will be sent again whenever the ZNode is deleted, which will result in a huge amount of requests.
+
+According to the paper, there is an optimal implementation (**Ticket Lock**):
+
+```markdown
+Lock:
+1 n = create(l + "/lock-", EPHEMERAL | SEQUENTIAL) // l is the lock path
+2 C = getChildren(l, false)                        // get all the children of l
+3 if n is the smallest ZNode in C, exit            // if no smaller ZNode, then get the lock
+4 p = ZNode in C that is just before n             // otherwise, get the ZNode just before n
+5 if exists(p, true), wait for watch event         // wait for the ZNode to be deleted
+6 goto 2                                           // retry
+
+Unlock:
+1 delete(n)
+```
+
+Here the `SEQUENTIAL` flag is used to ensure that the ZNodes are ordered by the sequence id, and the request will be dealt with in order, thus reduce the amount of requests.
+
+The lock in Zookeeper is not like the lock in go. When Zookeeper ensures that the holder of the Zookeeper lock has failed it will revoke the lock, and there will be some intermediate states that the lock is not held by anyone. Here the logs of Zookeeper are used to ensure the reliability of the intermediate states.
+
+The Zookeeper locks are usually used in:
+
+- Master election
+- Soft lock
+  - Ensure that a worker of MapReduce will only have one specific Map Task at a time. As re-executing is acceptable for MapReduce, if the worker failed, the task will be reassigned to another worker.
+
+## Approaches to build Replicated State Machines
+
+### 1. Run all operations through Raft / Paxos (used in Lab 3)
+   - This is not common in real applications, and is not the standard way to implement the Replicated State Machine as well.
+### 2. Configuration manager + Primary / Backup replication (more common)
+   - Implemented using a configuration manager like Zookeeper to act as Coordinator / Master, and inside of which, the consensus protocol like Raft or Paxos is used. The Primary / Backup replication can also be used here.
+   - E.g. :
+     - GFS has a Master and many Chunk servers with Primary / Backup protocol
+     - VM-FT has a test-and-set storage server as the Coordinator, and the VMs as the Primary / Backup, synchronized with channels or other methods.
+   - It has a lower cost when maintaining the state of the system.
+
+## Overview
+
+This is a kind of Replicated State Machine implemented using [Approach 2](#2-configuration-manager--primary--backup-replication-more-common) above, with properties:
+
+1. Read / query operations only involve 1 server.
+2. Have simple recovery plan / mechanism.
+3. The system is linearizable.
+
+![Chain Replication](/images/Chain_Replication.png)
+
+- The Client sends the `write` request to the Head
+- Head generates the log, updates the state through storage, and sends the log to the next server.
+- The Middle servers receive the log, update the state, and send the log to their next server.
+- Tail receives the log, updates the state, and sends the log back to the Client.
+
+Simply adding more servers can help to achieve a higher fault tolerance.
+
+`write` operations are always sent to the Head, and `read` operations are always sent to the Tail for direct response.
+
+Tails are known as `Commit Points`, as it is the only visible point to the Clients, which provides the linearizability.
+
+## Crash
+
+There are only 3 possible crash situations in Chain Replication:
+
+- Head crashed
+- Middle crashed
+- Tail crashed
+
+Its failover plan is easier than Raft, as the whole system is a linked list, and all the configurations are stored in the configuration server.
+
+### Head crashed (Easiest)
+
+If the Head crashed when the Client sent the `write` request, the Client will retry the request to the next server, it will become the new Head if valid, and the system will continue to work with the new Head.
+
+### Middle crashed (More complex)
+
+If the Middle crashed, the configuration server might notify the servers to build a new chain and do the extra synchronization to ensure the consistency.
+
+### Tail crashed (Relatively easy)
+
+If the Tail crashed, the configuration server will notify the previous server to become the new Tail, and the system will continue to work. Client can know the new Tail through the configuration server.
+
+## Add replica
+
+We can simply add a replica to the end of the chain, and the system will continue to work.
+
+1. The original Tail will send the log to the new Tail and record the logs synced to the new Tail, while keeping the interaction to the Client.
+2. When the sync is finished, the new Tail will send the `ack` to the original Tail through configuration manager, that it can become the new Tail.
+3. Configuration manager will set the new Tail as the Tail.
+4. Client can know the new Tail through the configuration manager, and the system will continue to work.
+
+**Is it possible that the original Tail will always be the Tail, as while the new Tail is syncing, the original Tail will still interact with the Client and get the new data?**
+
+- Assume that the original Tail is still the Tail, and the new Tail is syncing the 1 ~ 100 logs, and during which the original Tail received the 101 ~ 110 logs. Then the new Tail can inform the original Tail to stop the interaction with the Client after the sync, and inform the configuration manager that it is the new Tail, but will not be able to respond to the Client only after the sync is finished. So here might have a short block / delay for the Client.
+
+## Chain Replication vs. Raft
+
++ Chain Replication
+  - Split RPCs into 2 parts: `write` for Head and `read` for Tail
+  - Head only needs to send the log to the next server once, and the rest of the servers will do the same.
+  - `read` operations are faster as it only involves the Tail.
+  - Simple failover plan.
++ Raft
+  - No need for reconfiguration if any server crashed.
+  - Can continue to work as long as the majority of the servers are still working.
+
+## Extension for read parallelism
+
+To improve the read performance, we can split object across multiple chains, and the Client can send the `read` request to any of the Tails, and the Tails will send the response back to the Client.
+
+E.g. Here are 3 servers S1 ~ S3, and we can build 3 chains:
+
+- S1 -> S2 -> S3
+- S2 -> S3 -> S1
+- S3 -> S1 -> S2
+
+The data can be split into 3 shards, and if the shards were equally `write` to the 3 chains, the `read` operations can be parallelized to the 3 chains, and the read throughput can be improved linearly, and ideally, the read throughput can be 3 times of the original, while it can still maintain the linearizability.
+
+Client might can know the configuration of the chains through the configuration manager, and send the `read` request to the Tails of the chains.
