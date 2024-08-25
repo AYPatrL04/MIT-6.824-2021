@@ -92,6 +92,16 @@
   - [Add replica](#add-replica)
   - [Chain Replication vs. Raft](#chain-replication-vs-raft)
   - [Extension for read parallelism](#extension-for-read-parallelism)
+- [Frangipani](#frangipani)
+  - [Overview](#overview-1)
+  - [Use case](#use-case)
+  - [Challenges](#challenges)
+  - [Cache coherence / consistency](#cache-coherence--consistency)
+  - [Protocol](#protocol)
+  - [Atomicity](#atomicity)
+  - [Crash recovery](#crash-recovery)
+  - [Crash scenarios](#crash-scenarios)
+  - [Logs and version](#logs-and-version)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -1315,7 +1325,7 @@ However, the above mechanism is not suitable for the situation that many Clients
 
 According to the paper, there is an optimal implementation (**Ticket Lock**):
 
-```markdown
+```pseudo
 Lock:
 1 n = create(l + "/lock-", EPHEMERAL | SEQUENTIAL) // l is the lock path
 2 C = getChildren(l, false)                        // get all the children of l
@@ -1429,3 +1439,180 @@ E.g. Here are 3 servers S1 ~ S3, and we can build 3 chains:
 The data can be split into 3 shards, and if the shards were equally `write` to the 3 chains, the `read` operations can be parallelized to the 3 chains, and the read throughput can be improved linearly, and ideally, the read throughput can be 3 times of the original, while it can still maintain the linearizability.
 
 Client might can know the configuration of the chains through the configuration manager, and send the `read` request to the Tails of the chains.
+
+<h6 align="center">======= Lec.12 Sun. 25 Aug. 2024 =======</h6>
+
+# Frangipani
+
+- Cache coherence
+- Distributed locking
+- Distributed crash recovery
+
+For traditional network file systems, the works done in servers are usually complex, while clients only need to call the APIs or cache the data.
+
+## Overview
+
+Frangipani has no specific role of file server, all clients themselves are acting as the file servers, as they run the file server code themselves.
+
+Here all clients shared a single virtual disk that realized using Petal, built with many machines that replicated the disk blocks, inside of which the consensus algorithm like Paxos is used to ensure the orders.
+
+The APIs of Frangipani are read / write blocks of the virtual disks.
+
+## Use case
+
+It is mainly used between the researchers that temporarily need to transfer some shared files, and as all the participants are reliable, the safety of the system is not that important.
+
+There are 2 kind of sharing:
+
+- user to user: client to client
+- user to workstation: client to server
+
+Thus, there are some design requirements:
+
+- caching
+  - The data should not be stored all in Petal. Clients use `write back cache` instead of `write through cache`, that is, the data will be stored in the cache first, and then be written to Petal in the future.
+- strong consistency
+  - If one client wrote the data, the other clients should be able to see the data changes.
+- performance
+  - The system should be able to handle the high throughput of the data transfer.
+
+Comparing with GFS, GFS does not provide Unix or POSIX compatibility, but Frangipani can run the Unix standard applications, and it can act as a single file system rather than a distributed file system.
+
+## Challenges
+
+Assume that Workstation1 does the `read f(ile)` operation, then local cache manipulate the file, there are some possible situations need to be considered how to deal with:
+
+1. Workstation2 `cat f`: use **cache coherence** to ensure that Workstation2 can see the changes made by Workstation1.
+2. Workstation1 creates `dir/f1`, Workstation2 creates `dir/f2`: need to ensure that the operations are atomic, thus files will not be replaced by each other.
+3. Workstation1 crashes during file system operations: need the **crash recovery** mechanism to ensure that the system can recover from the crash.
+
+## Cache coherence / consistency
+
+The lock server maintains a table that records the file inode and the workstation that owns its lock. The lock server itself is a distributed service like Zookeeper, which provides APIs like `lock` and `unlock`, and has fault tolerance.
+
+<table>
+  <tr>
+    <th>File inode</th>
+    <th>Workstation</th>
+  </tr>
+  <tr>
+    <td>f1</td>
+    <td>WS1</td>
+  </tr>
+  <tr>
+    <td>f2</td>
+    <td>WS2</td>
+  </tr>
+</table>
+
+Meanwhile, the workstations themselves need to maintain a table that records the file inode and the state of its lock.
+
+<table>
+  <tr>
+    <th>File inode</th>
+    <th>State</th>
+  </tr>
+  <tr>
+    <td>f1</td>
+    <td>busy</td>
+  </tr>
+  <tr>
+    <td>f2</td>
+    <td>idle</td>
+  </tr>
+</table>
+
+The lock with `idle` state is called **sticky lock**, means the file has not been modified during the lock.
+
+As the workstation owns the sticky lock, if it wants to use the file, it can directly use it without communicating with Petal or reloading cache.
+
+Using the 2 kind of locks along with the rules below can ensure the cache coherence:
+
+- Acquire the lock before caching the file
+
+## Protocol
+
+Assume that there are WS1(workstation1 / client1), LS(lock server), and WS2(workstation2 / client2).
+
+There are 4 messages used in communications between WS and LS:
+
+- Requesting a lock
+- Granting a lock
+- Revoking a lock
+- Releasing a lock
+
+The procedure as follows:
+
+1. WS1 sends the `request` message to LS to request the lock of `f(ile)`.
+2. LS receives the request, and checks the table, if `f` has not been locked, it will grant the lock to WS1, and set the owner of the lock to WS1.
+3. WS1 receives the `grant` message, and caches `f`, and set the state of the lock to `busy`. After the `write` operation, it will set the state of the lock to `idle`. Here lock has an expiration time, and if WS1 crashed, the lock will be revoked by LS.
+4. WS2 sends the `request` message to LS to request the lock of `f`.
+5. LS receives the request, and checks the table, sends the `revoke` message to WS1. 
+6. If WS1 ensures that `f` will not be modified, it will release the lock, and sync `f` to Petal, and send the `release` message to LS. Otherwise, WS2 will wait until WS1 finishes the operation and releases the lock.
+7. LS receives the `release` message, records the owner of the lock as WS2, and sends the `grant` message to WS2.
+
+The WS need to acquire the lock before accessing the file in Petal, and will sync the file to Petal after the operation, thus the cache coherence can be ensured.
+
+## Atomicity
+
+Assume that WS1 creates `dir/f1`, as described in paper, it will acquire the lock of `dir` and then `f1` as the pseudo code below:
+
+```pseudo
+acquire("dir")
+create("f1", ...)
+acquire("f1")
+    allocate inode
+    write inode
+    update directory("f", ...)
+release("f1")
+```
+
+The lock here protects the operations involving inode in the Unix file system, and ensures that the operations are atomic.
+
+Before WS replying the LS, as both the directory and inode need the locks, it will need to firstly release the locks of `f1` and `dir`.
+
+## Crash recovery
+
+Updating the state in Petal needs to follow the protocol of **write-ahead logging**:
+
+In the implementation of Petal, the disk of a machine is composed of 2 parts:
+
+- log
+- file system
+
+When the WS wants to update the file, it will firstly write the log, and then install the update to the file system.
+
+Every Frangipani server has its own log, and each log entry has a sequence number. The log entry stores an array of updates to describe the operations, including:
+
+- block number that needs to be updated
+- version number
+- new bytes
+
+When LS sending the `revoke` message to WS, WS will firstly send the log to Petal, then send the updated blocks to Petal, and finally release the lock.
+
+The file data will not be written to log, but will be directly sent to Petal. The updates through logs are metadata, which is the information of the file, such as the inode, directory, etc. This is because the file data is too large to be stored in the log, which will result in low efficiency while syncing the logs.
+
+As the file data is not stored in the log, the FS should use its own mechanism to ensure the atomicity of the file data.
+
+For atomicity, the FS will firstly write the data to a temporary file, and then atomic rename the temporary file to the target file.
+
+To ensure that the file operations are atomic, every log entry will have a **checksum** to ensure the integrity of the log.
+
+## Crash scenarios
+
+1. WS crashed before sending the log to Petal
+   - The log will be lost, and the file will not be updated.
+2. WS crashed after sending the log to Petal
+   - The log will be stored in Petal. LS will wait until the lock expires, and ask other WSs to read the log of the crashed WS through recovery demons and apply the logged operations. After that, the lock will be reassign to the new WS.
+   - The data written by users can not be guaranteed. The log only used to ensure the metadata consistency.
+3. WS crashed during writing the log to Petal
+   - The checksum after the crash will be incorrect, and recovery demons will stop at the incorrect log.
+
+## Logs and version
+
+Assume that there are 3 WSs from WS1 to WS3:
+
+1. WS1 logged `delete("d/f")`
+2. WS2 logged `create("d/f")`
+3. WS1 crashed
+4. WS3 starts the recovery demon for WS1, trie to execute the `delete("d/f")` operation, but it will fail as the version of its log is smaller than the version of the log of WS2.
