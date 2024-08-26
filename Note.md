@@ -536,7 +536,7 @@ func ConcurrentChannel(url string, fetcher Fetcher) {
       |_____________________|
 ```
 - stub represents a kind of concept that use a controllable sub system to replace a certain function of the original system.
-- the procedure of marshal and unmarshal parameters happens in the stub.
+- the procedure of marshall and unmarshall parameters happens in the stub.
 - the stubs shown in the graph are literally the same object.
 
 ```go

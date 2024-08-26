@@ -1,5 +1,7 @@
 package shardkv
 
+import "time"
+
 //
 // Sharded key/value server.
 // Lots of replica groups, each running Raft.
@@ -10,23 +12,38 @@ package shardkv
 //
 
 const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongGroup  = "ErrWrongGroup"
-	ErrWrongLeader = "ErrWrongLeader"
+	OK                  = "OK"
+	ErrNoKey            = "ErrNoKey"
+	ErrWrongGroup       = "ErrWrongGroup"
+	ErrWrongLeader      = "ErrWrongLeader"
+	ShardNotReady       = "ShardNotReady"
+	ConfigNotReady      = "ConfigNotReady"
+	ErrInconsistentData = "ErrInconsistentData"
+	ErrTimeout          = "ErrTimeout"
+
+	PUT      = "Put"
+	APPEND   = "Append"
+	GET      = "Get"
+	CONFIG   = "Config"
+	ADDSHARD = "AddShard"
+	DELSHARD = "DelShard"
+
+	GetTimeout           = 500 * time.Millisecond
+	PutAppendTimeout     = 500 * time.Millisecond
+	AddShardsTimeout     = 500 * time.Millisecond
+	DelShardsTimeout     = 500 * time.Millisecond
+	ConfigTimeout        = 500 * time.Millisecond
+	UpdateConfigInterval = 100 * time.Millisecond
 )
 
 type Err string
 
-// Put or Append
 type PutAppendArgs struct {
-	// You'll have to add definitions here.
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	Key       string
+	Value     string
+	Op        string // "Put" or "Append"
+	ClientId  int64
+	RequestId int
 }
 
 type PutAppendReply struct {
@@ -34,11 +51,24 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Key string
-	// You'll have to add definitions here.
+	Key       string
+	ClientId  int64
+	RequestId int
 }
 
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+type SendShardArgs struct {
+	ShardId     int
+	Shard       Shard
+	ClientId    int64
+	RequestId   int
+	LastApplied map[int64]int
+}
+
+type SendShardReply struct {
+	Err Err
 }
