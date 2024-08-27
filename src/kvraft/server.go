@@ -156,7 +156,9 @@ func (kv *KVServer) applyMsgHandler() {
 					kv.getChannel(idx) <- op
 				}
 				if kv.maxraftstate != -1 && kv.rf.GetStateSize() > kv.maxraftstate {
+					kv.mu.Unlock()
 					kv.rf.Snapshot(idx, kv.Persistence())
+					kv.mu.Lock()
 				}
 				kv.mu.Unlock()
 			}

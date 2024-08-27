@@ -34,6 +34,8 @@ type Op struct {
 }
 
 func (sc *ShardCtrler) getChannel(index int) chan Op {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
 	ch, ok := sc.applyChMap[index]
 	if !ok {
 		sc.applyChMap[index] = make(chan Op, 1)
@@ -55,9 +57,7 @@ func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
 		reply.WrongLeader = true
 		return
 	}
-	sc.mu.Lock()
 	ch := sc.getChannel(lastIdx)
-	sc.mu.Unlock()
 	select {
 	case replyMsg := <-ch:
 		if replyMsg.ClientId == op.ClientId && replyMsg.SeqId == op.SeqId {
@@ -88,9 +88,7 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 		reply.WrongLeader = true
 		return
 	}
-	sc.mu.Lock()
 	ch := sc.getChannel(lastIdx)
-	sc.mu.Unlock()
 	select {
 	case replyMsg := <-ch:
 		if replyMsg.ClientId == op.ClientId && replyMsg.SeqId == op.SeqId {
@@ -123,9 +121,7 @@ func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 		reply.WrongLeader = true
 		return
 	}
-	sc.mu.Lock()
 	ch := sc.getChannel(lastIdx)
-	sc.mu.Unlock()
 	select {
 	case replyMsg := <-ch:
 		if replyMsg.ClientId == op.ClientId && replyMsg.SeqId == op.SeqId {
@@ -157,9 +153,7 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 		reply.WrongLeader = true
 		return
 	}
-	sc.mu.Lock()
 	ch := sc.getChannel(lastIdx)
-	sc.mu.Unlock()
 	select {
 	case replyMsg := <-ch:
 		if replyMsg.ClientId == op.ClientId && replyMsg.SeqId == op.SeqId {
@@ -192,8 +186,8 @@ func (sc *ShardCtrler) applyMsgHandler() {
 			if msg.CommandValid {
 				idx := msg.CommandIndex
 				op := msg.Command.(Op)
+				sc.mu.Lock()
 				if !sc.duplicateOp(op.ClientId, op.SeqId) {
-					sc.mu.Lock()
 					switch op.OpType {
 					case JOIN:
 						sc.clientSeqMap[op.ClientId] = op.SeqId
@@ -206,8 +200,8 @@ func (sc *ShardCtrler) applyMsgHandler() {
 						sc.configs = append(sc.configs, *sc.moveHandler(op.MoveShard, op.MoveGID))
 					}
 					sc.clientSeqMap[op.ClientId] = op.SeqId
-					sc.mu.Unlock()
 				}
+				sc.mu.Unlock()
 				sc.getChannel(idx) <- op
 			}
 		}

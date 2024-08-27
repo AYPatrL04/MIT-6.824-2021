@@ -199,6 +199,7 @@ func (kv *ShardKV) applyMsgHandler() {
 								kv.shards[shardId].Data[op.Key] += op.Value
 							case GET:
 							default:
+								kv.mu.Unlock()
 								log.Fatalf("Invalid Operation Type: %v.\n", op.OpType)
 							}
 						}
@@ -216,6 +217,7 @@ func (kv *ShardKV) applyMsgHandler() {
 					case DELSHARD:
 						kv.removeShard(op)
 					default:
+						kv.mu.Unlock()
 						log.Fatalf("Invalid Operation Type: %v.\n", op.OpType)
 					}
 				}
@@ -223,8 +225,8 @@ func (kv *ShardKV) applyMsgHandler() {
 					kv.rf.Snapshot(msg.CommandIndex, kv.Persist())
 				}
 				ch := kv.getChannel(msg.CommandIndex)
-				ch <- reply
 				kv.mu.Unlock()
+				ch <- reply
 			}
 			if msg.SnapshotValid {
 				if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
