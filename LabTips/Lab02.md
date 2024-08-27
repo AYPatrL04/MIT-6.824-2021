@@ -50,9 +50,9 @@ For `figure8 & figure8(unreliable)`, make sure that the `commitIndex` is updated
 
 ## 2D
 
-The function `rf.CondInstallSnapshot` is not necessary to be implemented if the sychronization is done and locked correctly.
+The function `rf.CondInstallSnapshot` is not necessary to be implemented if the synchronization is done and locked correctly.
 
-The `rf.Snapshot` here is called by the tester every 10 commands, we only need to check if the logs are updated, and take a newest snapshot of the updated logs.
+The `rf.Snapshot` here is called by the tester every 10 commands, we only need to check if the logs are updated, and take the newest snapshot of the updated logs.
 
 Here another function `rf.leaderSendSnapshot` is called only when the leader has a newer snapshot than the follower, and the follower will update its logs with the leader's snapshot.
 
