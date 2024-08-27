@@ -1,4 +1,4 @@
-# Solution for Lab 02
+# Tips for Lab 02
 
 ## 2A
 

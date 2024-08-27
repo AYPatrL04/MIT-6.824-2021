@@ -1,4 +1,4 @@
-# Solution for Lab 01
+# Tips for Lab 01
 
 ## Struct
 

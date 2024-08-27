@@ -1,4 +1,4 @@
-# Solution for Lab 03
+# Tips for Lab 03
 
 The tasks here mainly focus on the interaction between Client and Leader. The first thing to do is to understand the whole process of the interaction.
 
@@ -87,4 +87,4 @@ Test: ops complete fast enough (3A) ...
 
 Similar to 2C/2D, just implement the Persisting and Decoding functions. Might need to scan through the whole procedure to prevent deadlocks.
 
-The possible errors occurred during testing might can be fixed by making all operations strictly linearizable. //TODO
+The possible errors occurred during testing might can be fixed by making all operations strictly linearizable.
