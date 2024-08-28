@@ -17,3 +17,5 @@ For each operation, the client will firstly transfer the `key` to the correspond
 The leader will validate the key, and send the operation to the raft to update the operation log of itself and followers. After the operation is committed, the `ApplyMsgHandler` will catch the committed operation and apply it to the state machine.
 
 `ck.config = ck.sm.Query(-1)` refers to querying the newest configuration and replacing the current old configuration with it.
+
+Be aware of the consistency of the shards when modifying / moving them.

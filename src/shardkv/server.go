@@ -1,16 +1,16 @@
 package shardkv
 
 import (
+	"MIT-6_824-2021/labgob"
 	"MIT-6_824-2021/labrpc"
+	"MIT-6_824-2021/raft"
 	"MIT-6_824-2021/shardctrler"
 	"bytes"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 )
-import "MIT-6_824-2021/raft"
-import "sync"
-import "MIT-6_824-2021/labgob"
 
 type Op struct {
 	ClientId     int64
@@ -169,10 +169,7 @@ func (kv *ShardKV) killed() bool {
 }
 
 func (kv *ShardKV) applyMsgHandler() {
-	for {
-		if kv.killed() {
-			return
-		}
+	for !kv.killed() {
 		select {
 		case msg := <-kv.applyCh:
 			if msg.CommandValid {
@@ -222,7 +219,9 @@ func (kv *ShardKV) applyMsgHandler() {
 					}
 				}
 				if kv.maxraftstate != -1 && kv.rf.GetStateSize() > kv.maxraftstate {
+					kv.mu.Unlock()
 					kv.rf.Snapshot(msg.CommandIndex, kv.Persist())
+					kv.mu.Lock()
 				}
 				ch := kv.getChannel(msg.CommandIndex)
 				kv.mu.Unlock()
@@ -298,6 +297,8 @@ func (kv *ShardKV) clone(ConfigNum int, KVMap map[string]string) Shard {
 }
 
 func (kv *ShardKV) Persist() []byte {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(kv.Config)
@@ -365,11 +366,12 @@ func (kv *ShardKV) ConfigDetected() {
 					}
 					go func(servers []*labrpc.ClientEnd, args *SendShardArgs) {
 						serverIdx := 0
-						start := time.Now()
+						// start := time.Now()
 						for {
 							var reply SendShardReply
 							ok := servers[serverIdx].Call("ShardKV.AddShard", args, &reply)
-							if ok && reply.Err == OK || time.Now().Sub(start) >= 2000*time.Millisecond {
+							// if ok && reply.Err == OK || time.Since(start) >= 1000*time.Millisecond {
+							if ok && reply.Err == OK {
 								kv.mu.Lock()
 								op := Op{
 									OpType:   DELSHARD,
@@ -399,10 +401,9 @@ func (kv *ShardKV) ConfigDetected() {
 			continue
 		}
 		curConfig = kv.Config
-		mck := kv.mck
-		kv.mu.Unlock()
-		newConfig := mck.Query(curConfig.Num + 1)
+		newConfig := kv.mck.Query(curConfig.Num + 1)
 		if newConfig.Num != curConfig.Num+1 {
+			kv.mu.Unlock()
 			time.Sleep(UpdateConfigInterval)
 			continue
 		}
@@ -412,6 +413,7 @@ func (kv *ShardKV) ConfigDetected() {
 			ClientId:     int64(kv.gid),
 			SeqNum:       newConfig.Num,
 		}
+		kv.mu.Unlock()
 		kv.DoOp(op, ConfigTimeout)
 	}
 }
@@ -451,9 +453,11 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.applyChMap = make(map[int]chan OpReply)
 	kv.shards = make([]Shard, shardctrler.NShards)
 	snapshot := persister.ReadSnapshot()
+	kv.mu.Lock()
 	if len(snapshot) > 0 {
 		kv.DecodeSnapshot(snapshot)
 	}
+	kv.mu.Unlock()
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	go kv.applyMsgHandler()

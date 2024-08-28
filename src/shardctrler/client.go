@@ -6,11 +6,11 @@ package shardctrler
 
 import (
 	"MIT-6_824-2021/labrpc"
+	"crypto/rand"
+	"math/big"
 	rand2 "math/rand"
 	"time"
 )
-import "crypto/rand"
-import "math/big"
 
 type Clerk struct {
 	servers  []*labrpc.ClientEnd

@@ -40,7 +40,7 @@ Tips see [/LabTips](/LabTips), Implementations see [/src](/src).
 - [x] Lab 3A (Pass rate: 95+%)
 - [x] Lab 3B (Pass rate: 95+%)
 - [x] Lab 4A (Pass rate: 99+%)
-- [x] Lab 4B (Pass rate: 97+%)
+- [x] Lab 4B (Pass rate: 80+%)
 
 ### Lab1 
 An implementation of basic **MapReduce** framework composed of a master and multiple workers, which communicate with each other through RPC. The master assigns tasks to workers and collects the results. The worker performs the assigned tasks and reports the results to the master.
