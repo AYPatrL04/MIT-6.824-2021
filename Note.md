@@ -102,6 +102,13 @@
   - [Crash recovery](#crash-recovery)
   - [Crash scenarios](#crash-scenarios)
   - [Logs and version](#logs-and-version)
+- [Distributed Transaction](#distributed-transaction)
+  - [Transactions](#transactions)
+  - [Concurrency control](#concurrency-control)
+  - [2-phase locking (2PL)](#2-phase-locking-2pl)
+    - [Deadlock](#deadlock)
+  - [2-phase commit (2PC)](#2-phase-commit-2pc)
+  - [2PC crash analysis](#2pc-crash-analysis)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -1616,3 +1623,152 @@ Assume that there are 3 WSs from WS1 to WS3:
 2. WS2 logged `create("d/f")`
 3. WS1 crashed
 4. WS3 starts the recovery demon for WS1, trie to execute the `delete("d/f")` operation, but it will fail as the version of its log is smaller than the version of the log of WS2.
+
+<h6 align="center">======= Lec.13 Thu. 29 Aug. 2024 =======</h6>
+
+# Distributed Transaction
+
+- 2-phase locking (2PL, suitable for a single multicore machine)
+- 2-phase commit (2PC, suitable for distributed systems)
+
+The reason for using distributed transaction is that human need cross-machine operations, and the operations need to be atomic.
+
+## Transactions
+
+```markdown
+T1:             T2:
+- begin(x)      - begin(x)
+| - add(x, 1)   | - get(x)
+| - dec(y, 1)   | - get(y)
+- commit(x)     | - print(x, y)
+                - commit(x)
+```
+
+A transaction is a sequence of operations that are **Atomic, Consistent, Isolated, and Durable** (ACID). See [Wikipedia-ACID](https://en.wikipedia.org/wiki/ACID) for more details if not familiar.
+
+## Concurrency control
+
+- Pessimistic: Lock before read / write to ensure the serializability.
+- Optimistic: Read / write without lock, and check if the operations are serializable when reaching the commit point. If not, rollback / abort the transaction and retry(need other mechanisms).
+
+Here focuses on the pessimistic concurrency control.
+
+## 2-phase locking (2PL)
+
+**Lock per record**
+
+- T acquires the lock before using
+- T holds until commit / abort 
+- **The number of locks will only increase during the transactions using 2PL**, this is to ensure that the intermediate states are consistent and not visible to other transactions.
+
+2PL is an improvement of simple(strict) locking. A simple locking or strict locking will lock all the records at the beginning of the transaction, and release all the locks at the end of the transaction. Instead, 2PL will dynamically acquire the locks when needed, which supports a more flexible concurrency. Generally, 2PL has a higher concurrency than simple locking.
+
+### Deadlock
+
+Consider a situation that:
+
+| time | T1 | T2 |
+|----|----|----|
+| 1 | lock(x), put(x) | |
+| 2 | | lock(y), get(y) |
+| 3 | | wait for x, get(x) |
+| 4 | wait for y, put(y) | |
+
+Here T1 and T2 are in a deadlock that T1 is waiting for lock(y) and T2 is waiting for lock(x).
+
+To solve the deadlock when detected, the transaction system will choose one of the transactions (victim) to abort. The victim will roll back and release the locks, and the other transaction will continue to work. The client or application will decide how to deal with the aborted transaction, like retrying or simply giving up.
+
+There are 2 ways to detect the deadlock:
+
+- Timeout: If the transaction waits for a long time, it will be considered as a deadlock.
+- Wait-for graph: The system will build a graph to record the waiting relationship of the transactions, and if there is a cycle in the graph, it will be considered as a deadlock.
+
+## 2-phase commit (2PC)
+
+<table>
+  <tr>
+    <th>Time</th>
+    <th>Coordinator</th>
+    <th>Server A (with X record)</th>
+    <th>Server B (with Y record)</th>
+  </tr>
+  <tr>
+    <td>1</td>
+    <td>Create Transaction<br>inform A to execute put(x)<br>inform B to execute put(y)</td>
+    <td></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td></td>
+    <td>Lock x<br>put(x)<br>log(x)</td>
+    <td>Lock y<br>put(y)<br>log(y)</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>Query:<br>?prepare(A)<br>?prepare(B)</td>
+    <td></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td></td>
+    <td>prepare(A)</td>
+    <td>prepare(B)</td>
+  </tr>
+  <tr>
+    <td colspan="4">Case: <code>prepare(A) && prepare(B)</code></td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td>Commit:<br>commit(A)<br>commit(B)</td>
+    <td></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td></td>
+    <td>Install log (execute put(x))<br>Unlock x<br>OK</td>
+    <td>Install log (execute put(y))<br>Unlock y<br>OK</td>
+  </tr>
+  <tr>
+    <td>7</td>
+    <td>Acknowledge OKs</td>
+    <td></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td colspan="4">Case: <code>!prepare(A) || !prepare(B)</code> (due to deadlock, lack of space, etc.)</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td>Abort:<br>abort(A)<br>abort(B)</td>
+    <td></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td></td>
+    <td>Rollback(x)<br>Unlock x<br>OK</td>
+    <td>Rollback(y)<br>Unlock y<br>OK</td>
+  </tr>
+  <tr>
+    <td>7</td>
+    <td>Acknowledge OKs</td>
+    <td></td>
+    <td></td>
+  </tr>
+</table>
+
+## 2PC crash analysis
+
+- Server crashed after replying `?prepare: OK`
+  - The crashed server will continue to work after recovery and check logs to load the data. 2PC in this case will have some expensive procedures to ensure the consistency, like sending multiple messages and stably storing operation logs.
+- Coordinator crashed after sending `commit`
+  - If A replied `OK`, but B did not, then B will wait for the coordinator to recover and send the `OK` message again. In this case, B has to wait, during which the `lock(y)` will be held.
+- Server did not reply the `?prepare` message
+  - The coordinator will wait. If timeout, the coordinator will abort the transaction, and will inform the server to terminate the transaction when the server recovers.
+
+To enhance the fault tolerance, the Raft or other consensus algorithms can be used in the 2PC, and the logs can be stored in the Raft to ensure the C(consistency).
+
+Raft is actually similar to 2PC. The biggest difference is that Raft based on the rule of majority, while 2PC requires all the servers to have same replies. Also, for Raft, all the servers are doing the same thing, while in 2PC, the servers are doing different things. Meanwhile, Raft is for high availability, while 2PC is for atomicity across machines.

@@ -32,15 +32,15 @@ Notes see [/Note.md](/Note.md)
 
 Tips see [/LabTips](/LabTips), Implementations see [/src](/src).
 
-- [x] Lab 1 (Pass rate: 99+%)
-- [x] Lab 2A (Pass rate: 99+%)
-- [x] Lab 2B (Pass rate: 99+%)
-- [x] Lab 2C (Pass rate: 90+%)
-- [x] Lab 2D (Pass rate: 99+%)
-- [x] Lab 3A (Pass rate: 95+%)
-- [x] Lab 3B (Pass rate: 95+%)
-- [x] Lab 4A (Pass rate: 99+%)
-- [x] Lab 4B (Pass rate: 80+%)
+- [x] Lab 1
+- [x] Lab 2A
+- [x] Lab 2B
+- [x] Lab 2C
+- [x] Lab 2D
+- [x] Lab 3A
+- [x] Lab 3B
+- [x] Lab 4A
+- [x] Lab 4B
 
 ### Lab1 
 An implementation of basic **MapReduce** framework composed of a master and multiple workers, which communicate with each other through RPC. The master assigns tasks to workers and collects the results. The worker performs the assigned tasks and reports the results to the master.
