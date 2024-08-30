@@ -109,6 +109,17 @@
     - [Deadlock](#deadlock)
   - [2-phase commit (2PC)](#2-phase-commit-2pc)
   - [2PC crash analysis](#2pc-crash-analysis)
+- [Spanner](#spanner)
+  - [Organization](#organization)
+  - [Challenges](#challenges-1)
+  - [Read-write transactions](#read-write-transactions)
+  - [Read-only transactions](#read-only-transactions)
+    - [Correctness](#correctness)
+    - [Bad plan](#bad-plan)
+    - [Snapshot Isolation](#snapshot-isolation)
+  - [Clock drift](#clock-drift)
+  - [Clock synchronization](#clock-synchronization)
+  - [Summary](#summary-1)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -1772,3 +1783,152 @@ There are 2 ways to detect the deadlock:
 To enhance the fault tolerance, the Raft or other consensus algorithms can be used in the 2PC, and the logs can be stored in the Raft to ensure the C(consistency).
 
 Raft is actually similar to 2PC. The biggest difference is that Raft based on the rule of majority, while 2PC requires all the servers to have same replies. Also, for Raft, all the servers are doing the same thing, while in 2PC, the servers are doing different things. Meanwhile, Raft is for high availability, while 2PC is for atomicity across machines.
+
+<h6 align="center">======= Lec.14 Fri. 30 Aug. 2024 =======</h6>
+
+# Spanner
+
+- Wide-area transactions
+  - Read-write transaction 2PC+2PL+Paxos groups
+  - Read-only transaction: Optimized by Spanner, about 10x faster than read-write transaction, can run in any data center.
+    - Snapshot isolation
+    - Synchronized clocks (TrueTime)
+- Wide-used in Google
+
+## Organization
+
+Suppose that there are 3 servers S1 ~ S3, which have same shards that belong to the same Paxos group:
+
+| Paxos group | S1 | S2 | S3 |
+|----|----|----|----|
+| Group #1 | Shard a ~ m | Shard a ~ m | Shard a ~ m |
+| Group #2 | Shard n ~ z | Shard n ~ z | Shard n ~ z |
+
+Here multiple shards is for higher parallelism. If transactions involved multiple shards, a transactions will not depend on other transactions, and can be executed in parallel.
+
+Every shard has its own Paxos group that used for replication, and can run normally with the majority of the servers. The replication is for the fault tolerance, and using majority rule can pass through slowness.
+
+Replicas were usually deployed at somewhere close to clients, such that client can access its nearest replica. The read-only transactions are usually executed by local replicas without communication with other data centers.
+
+## Challenges
+
+- Read of local replica yield latest write, requires a stronger consistency.
+- Support transactions across shards.
+- Read-only transactions and read-write transactions must be serializable.
+
+## Read-write transactions
+
+- When executing a read-only transaction, the client will directly read the leader of the Paxos group.
+- When executing a read-write transaction, the client will need to do write operations through the coordinator that coordinates the leaders between Paxos groups.
+- Lock table only stored in the leader of Paxos group, and does no replication in the group(to accelerate the read-only transactions).
+  - If leader crashed, the transaction will need to restart as the lock table is lost.
+  - If crashed after `prepare`, the state of some records with locks will be synced to other group members, and will not be lost.
+- The coordinator of 2PC is also the Paxos group, this is for enhancing the fault tolerance and reducing the possibility that the coordinator crashed and participants have to wait to commit.
+
+Multiple servers as Coordinator, multiple servers execute the operations related to shards.
+
+| Time | Client | Paxos-Coordinator | Paxos-Shard-A(Sa) | Paxos-Shard-B(Sb) |
+|----|----|----|----|----|
+| 1 | Transaction ID: tid<br>To Sa Leader: read(a)<br>To Sb Leader: read(b) | | | |
+| 2 | | | Leader lock(x) by 2PL<br>Set owner as Client | Leader lock(y) by 2PL<br>Set owner as Client |
+| 3 | Send to Coordinator:<br> add(x), dec(y) | | | |
+| 4 | | Received the request<br><code>?add(x), ?dec(y)</code> | | |
+| 5 | | | R-Lock => W-Lock<br><code>log(add(x))</code> | R-Lock => W-Lock<br><code>log(dec(y))</code> |
+| 6 | | <code>?prepare(Sa)</code><br><code>?prepare(Sb)</code><br><code>log</code> | | |
+| 7 | | | <code>OK</code> if: <br>locked, <br>logged, <br>synced, <br>ready to commit | <code>OK</code> if: <br>locked, <br>logged, <br>synced, <br>ready to commit |
+| 8 | | <code>commit(tid)</code><br><code>log</code> | | |
+| 9 | | | install log, <br>execute <code>add(x)</code>, <br>unlock x, <code>OK</code> | install log, <br>execute <code>dec(y)</code>, <br>unlock y, <code>OK</code> |
+
+Shards replicating the lock that is holding when it does the `prepare` operation rather than directly replicating the whole lock table.
+
+## Read-only transactions
+
+- Fast, read from local shards
+- No need to lock, no need to do 2PC
+
+### Correctness
+
+Here correctness means:
+
+1) the transactions are serializable
+2) external consistency
+   - if a transaction T2 starts after T1 commits, then T2 should see the results of T1
+   - **serializability + real-time ordering**, more like the linearizability
+
+The difference between external consistency and linearizability is that linearizability is operation-based, while external consistency is transaction-based.
+
+### Bad plan
+
+| Time | Transaction T1 | Transaction T2 | Transaction T3 |
+|----|----|----|----|
+| 1 | set X=1, Y=1, Commit | | Read X (get X=1) |
+| 2 | | set X=2, Y=2, Commit | |
+| 3 | | | Read Y (get Y=2), Commit |
+
+Here T3 should see the same X and Y, but it sees X=1 and Y=2, which is inconsistent.
+
+To solve this, Spanner uses **Snapshot Isolation**.
+
+### Snapshot Isolation
+
+- Assign a timestamp to every transaction
+  - Read-write transaction: the timestamp is the commit time
+  - Read-only transaction: the timestamp is the start time
+- Execute transactions in timestamp order
+- Each replica stores data with timestamp
+
+| Time | Transaction T1<br>(Timestamp: 1) | Transaction T2<br>(Timestamp: 3) | Transaction T3<br>(Timestamp: 2) |
+|----|----|----|----|
+| 1 | set X=1, Y=1, Commit | | Read X (get X=1) |
+| 2 | | set X=2, Y=2, Commit | |
+| 3 | | | Read Y (get Y=1), Commit |
+
+Here T3 will get the latest committed value before its timestamp, so it will see X=1 and Y=1.
+
+Every replica maintains a version table that stores the versions of the data along with the timestamps, and the read-only transactions will read the data with the timestamp that is less than its own timestamp.
+
+The Spanner here also depends on the **SafeTime** mechanism, which ensures that the read operation will get the latest data before its timestamp.
+
+- Paxos sends write operations in timestamp order.
+- If a read operation with timestamp Tr is sent to a Paxos group, the Paxos group will wait until any write operation committed with timestamp Tw > Tr is sent to the Paxos group, and then execute the read operation.
+  - Here also need to wait for the prepared but not committed operations in 2PC.
+
+## Clock drift
+
+- Matters only for read-only transactions
+
+If the timestamp is:
+- too large:
+  - Assume T1 executed at 15, but the machine thinks it should be executed at 18, then it will only need to wait for longer time, and the correctness will not be affected.
+- too small:
+  - Assume T1 executed at 15, but the machine thinks it should be executed at 9, and if there is a committed transaction T2 with timestamp 10, then T1 will not see the data of T2, which will affect the correctness.
+
+## Clock synchronization
+
+1. Atomic clocks
+2. Synchronize with global time (using GPS or etc.)
+
+Though applied the clock synchronization, the clock drift still exists, and Spanner uses the **TrueTime** mechanism to ensure the correctness (AbsoluteTime + (earliest, latest) uncertainty).
+
+[NTP](https://en.wikipedia.org/wiki/Network_Time_Protocol) might be used here to synchronize the clocks.
+
+To solve the clock drift, Spanner uses the **time interval** rather than real timestamp. Every transaction has a `now` with `[earliest, latest]`.
+
+- Start rule: now.latest
+  - read-write transaction: assign `now.latest` when commit starts
+  - read-only transaction: assign `now.latest` when transaction starts
+- Commit wait rule: delay until `now.earliest`
+
+| Transaction T1(@1) | Transaction T2(@10) | Transaction T3(@12) |
+|----|----|----|
+| set X=1, Commit<br>`[@1, @10]` | | |
+| | set X=2, Commit<br>`[@11, @20]` | |
+| | | Read X (get X=2)<br>`[@10, @12]` |
+
+## Summary
+
+- Read-write transactions: 2PC + 2PL + Paxos groups, global serializability
+- Read-only transactions: Read only local replica, use snapshot isolation to ensure the correctness
+  - Snapshot isolation: ensure the serializability.
+  - Ordered by timestamp: ensure the external consistency.
+    - Using time interval.
