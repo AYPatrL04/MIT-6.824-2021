@@ -120,6 +120,15 @@
   - [Clock drift](#clock-drift)
   - [Clock synchronization](#clock-synchronization)
   - [Summary](#summary-1)
+- [FaRM (Fast Remote Memory)](#farm-fast-remote-memory)
+  - [Setup](#setup)
+  - [FaRM API](#farm-api)
+  - [Kernel bypass](#kernel-bypass)
+  - [RDMA (Remote Direct Memory Access)](#rdma-remote-direct-memory-access)
+  - [Transaction using RDMA](#transaction-using-rdma)
+  - [OOC (Optimistic Concurrency Control)](#ooc-optimistic-concurrency-control)
+  - [Strict serializability](#strict-serializability)
+  - [Summary](#summary-2)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -1678,12 +1687,12 @@ Here focuses on the pessimistic concurrency control.
 
 Consider a situation that:
 
-| time | T1 | T2 |
-|----|----|----|
-| 1 | lock(x), put(x) | |
-| 2 | | lock(y), get(y) |
-| 3 | | wait for x, get(x) |
-| 4 | wait for y, put(y) | |
+| time | T1                 | T2                 |
+|------|--------------------|--------------------|
+| 1    | lock(x), put(x)    |                    |
+| 2    |                    | lock(y), get(y)    |
+| 3    |                    | wait for x, get(x) |
+| 4    | wait for y, put(y) |                    |
 
 Here T1 and T2 are in a deadlock that T1 is waiting for lock(y) and T2 is waiting for lock(x).
 
@@ -1799,10 +1808,10 @@ Raft is actually similar to 2PC. The biggest difference is that Raft based on th
 
 Suppose that there are 3 servers S1 ~ S3, which have same shards that belong to the same Paxos group:
 
-| Paxos group | S1 | S2 | S3 |
-|----|----|----|----|
-| Group #1 | Shard a ~ m | Shard a ~ m | Shard a ~ m |
-| Group #2 | Shard n ~ z | Shard n ~ z | Shard n ~ z |
+| Paxos group | S1          | S2          | S3          |
+|-------------|-------------|-------------|-------------|
+| Group #1    | Shard a ~ m | Shard a ~ m | Shard a ~ m |
+| Group #2    | Shard n ~ z | Shard n ~ z | Shard n ~ z |
 
 Here multiple shards is for higher parallelism. If transactions involved multiple shards, a transactions will not depend on other transactions, and can be executed in parallel.
 
@@ -1827,17 +1836,17 @@ Replicas were usually deployed at somewhere close to clients, such that client c
 
 Multiple servers as Coordinator, multiple servers execute the operations related to shards.
 
-| Time | Client | Paxos-Coordinator | Paxos-Shard-A(Sa) | Paxos-Shard-B(Sb) |
-|----|----|----|----|----|
-| 1 | Transaction ID: tid<br>To Sa Leader: read(a)<br>To Sb Leader: read(b) | | | |
-| 2 | | | Leader lock(x) by 2PL<br>Set owner as Client | Leader lock(y) by 2PL<br>Set owner as Client |
-| 3 | Send to Coordinator:<br> add(x), dec(y) | | | |
-| 4 | | Received the request<br><code>?add(x), ?dec(y)</code> | | |
-| 5 | | | R-Lock => W-Lock<br><code>log(add(x))</code> | R-Lock => W-Lock<br><code>log(dec(y))</code> |
-| 6 | | <code>?prepare(Sa)</code><br><code>?prepare(Sb)</code><br><code>log</code> | | |
-| 7 | | | <code>OK</code> if: <br>locked, <br>logged, <br>synced, <br>ready to commit | <code>OK</code> if: <br>locked, <br>logged, <br>synced, <br>ready to commit |
-| 8 | | <code>commit(tid)</code><br><code>log</code> | | |
-| 9 | | | install log, <br>execute <code>add(x)</code>, <br>unlock x, <code>OK</code> | install log, <br>execute <code>dec(y)</code>, <br>unlock y, <code>OK</code> |
+| Time | Client                                                                | Paxos-Coordinator                                                          | Paxos-Shard-A(Sa)                                                           | Paxos-Shard-B(Sb)                                                           |
+|------|-----------------------------------------------------------------------|----------------------------------------------------------------------------|-----------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+| 1    | Transaction ID: tid<br>To Sa Leader: read(a)<br>To Sb Leader: read(b) |                                                                            |                                                                             |                                                                             |
+| 2    |                                                                       |                                                                            | Leader lock(x) by 2PL<br>Set owner as Client                                | Leader lock(y) by 2PL<br>Set owner as Client                                |
+| 3    | Send to Coordinator:<br> add(x), dec(y)                               |                                                                            |                                                                             |                                                                             |
+| 4    |                                                                       | Received the request<br><code>?add(x), ?dec(y)</code>                      |                                                                             |                                                                             |
+| 5    |                                                                       |                                                                            | R-Lock => W-Lock<br><code>log(add(x))</code>                                | R-Lock => W-Lock<br><code>log(dec(y))</code>                                |
+| 6    |                                                                       | <code>?prepare(Sa)</code><br><code>?prepare(Sb)</code><br><code>log</code> |                                                                             |                                                                             |
+| 7    |                                                                       |                                                                            | <code>OK</code> if: <br>locked, <br>logged, <br>synced, <br>ready to commit | <code>OK</code> if: <br>locked, <br>logged, <br>synced, <br>ready to commit |
+| 8    |                                                                       | <code>commit(tid)</code><br><code>log</code>                               |                                                                             |                                                                             |
+| 9    |                                                                       |                                                                            | install log, <br>execute <code>add(x)</code>, <br>unlock x, <code>OK</code> | install log, <br>execute <code>dec(y)</code>, <br>unlock y, <code>OK</code> |
 
 Shards replicating the lock that is holding when it does the `prepare` operation rather than directly replicating the whole lock table.
 
@@ -1859,11 +1868,11 @@ The difference between external consistency and linearizability is that lineariz
 
 ### Bad plan
 
-| Time | Transaction T1 | Transaction T2 | Transaction T3 |
-|----|----|----|----|
-| 1 | set X=1, Y=1, Commit | | Read X (get X=1) |
-| 2 | | set X=2, Y=2, Commit | |
-| 3 | | | Read Y (get Y=2), Commit |
+| Time | Transaction T1       | Transaction T2       | Transaction T3           |
+|------|----------------------|----------------------|--------------------------|
+| 1    | set X=1, Y=1, Commit |                      | Read X (get X=1)         |
+| 2    |                      | set X=2, Y=2, Commit |                          |
+| 3    |                      |                      | Read Y (get Y=2), Commit |
 
 Here T3 should see the same X and Y, but it sees X=1 and Y=2, which is inconsistent.
 
@@ -1878,10 +1887,10 @@ To solve this, Spanner uses **Snapshot Isolation**.
 - Each replica stores data with timestamp
 
 | Time | Transaction T1<br>(Timestamp: 1) | Transaction T2<br>(Timestamp: 3) | Transaction T3<br>(Timestamp: 2) |
-|----|----|----|----|
-| 1 | set X=1, Y=1, Commit | | Read X (get X=1) |
-| 2 | | set X=2, Y=2, Commit | |
-| 3 | | | Read Y (get Y=1), Commit |
+|------|----------------------------------|----------------------------------|----------------------------------|
+| 1    | set X=1, Y=1, Commit             |                                  | Read X (get X=1)                 |
+| 2    |                                  | set X=2, Y=2, Commit             |                                  |
+| 3    |                                  |                                  | Read Y (get Y=1), Commit         |
 
 Here T3 will get the latest committed value before its timestamp, so it will see X=1 and Y=1.
 
@@ -1919,11 +1928,11 @@ To solve the clock drift, Spanner uses the **time interval** rather than real ti
   - read-only transaction: assign `now.latest` when transaction starts
 - Commit wait rule: delay until `now.earliest`
 
-| Transaction T1(@1) | Transaction T2(@10) | Transaction T3(@12) |
-|----|----|----|
-| set X=1, Commit<br>`[@1, @10]` | | |
-| | set X=2, Commit<br>`[@11, @20]` | |
-| | | Read X (get X=2)<br>`[@10, @12]` |
+| Transaction T1(@1)             | Transaction T2(@10)             | Transaction T3(@12)              |
+|--------------------------------|---------------------------------|----------------------------------|
+| set X=1, Commit<br>`[@1, @10]` |                                 |                                  |
+|                                | set X=2, Commit<br>`[@11, @20]` |                                  |
+|                                |                                 | Read X (get X=2)<br>`[@10, @12]` |
 
 ## Summary
 
@@ -1932,3 +1941,124 @@ To solve the clock drift, Spanner uses the **time interval** rather than real ti
   - Snapshot isolation: ensure the serializability.
   - Ordered by timestamp: ensure the external consistency.
     - Using time interval.
+
+<h6 align="center">======= Lec.15 Sat. 31 Aug. 2024 =======</h6>
+
+# FaRM (Fast Remote Memory)
+
+FaRM provides strict serializability, and is designed for the high-performance distributed system. (using 90 servers to achieve 140 Million TPS, comparing with 10 ~ 100 TPS of Spanner)
+
+- One data center
+- Shard
+- Non-volatile DRAM
+- Kernel bypass + RDMA
+- OOC (Optimistic Concurrency Control)
+
+## Setup
+
+In a data center, there are 90 servers connected with a high-speed network, and each server has different shards called regions, each region is 2GB on DRAM (can be larger if needed), DRAMs are deployed on the servers with UPS (Uninterruptible Power Supply) to ensure the data will not be lost. They have a Primary-Backup replication mechanism to ensure the fault tolerance, with configuration manager and Zookeeper maintaining the mapping from the region to the servers (region# -> Si).
+
+We might imagine that region is like an object array, with 2GB per object. The object has a unique ID (`oid`), contains the region# and the offset in the region, and the metadata of the object (with a 64 bits number, top 1 bit for the lock, and the rest for the version number).
+
+## FaRM API
+
+- `txBegin()`: start a transaction
+- `txCommit()`: commit the transaction
+- `read(oid)`: read the object
+- `write(oid, data)`: write the object
+
+For abort, due to the optimistic concurrency control, it will retry the transaction.
+
+FaRM will use protocol like 2PC to apply atomic operations on objects across regions.
+
+## Kernel bypass
+
+FaRM runs as a user application on the operating system. It uses SSD for temporary storage when recovering from the crash, and uses DRAM to ensure the efficiency of read / write operations. To solve the bottleneck of the CPU, FaRM uses the kernel bypass mechanism to deal with the network data. Regularly this is done by using kernel drivers to read / write the NIC (Network Interface Card), and it is costly as the interaction of application and NIC will need to call the kernel and involve the network stack. The kernel bypass mechanism will order a send / receive operation queue that will be directly mapped to the address space of the application, and the application can directly read / write the NIC without calling the kernel, which will reduce the cost of the CPU. For the implementation, FaRM uses a user-level thread to poll the receiving queue of the NIC for the available data. FaRM keeps shifting between the application thread and the NIC polling thread.
+
+## RDMA (Remote Direct Memory Access)
+
+RDMA requires the support of NIC.
+
+Assume 2 FaRM servers connected with cable, server1 can directly put an RDMA packet to the sending queue of the NIC, and the NIC will send the packet to the NIC of server2. Server2 will parse the commands along with the packet that describes the operations (like read / write), and send the response back to server1. 
+
+RDMA can be used to do operations directly to the memory of the server without the help of interruption or other mechanisms, the NIC has the firmware to deal with the operations, load the data in the memory, request the memory address and put it to the response packet, and send it back. This is **one-sided RDMA**, which usually refers to the read operations.
+
+The **write RDMA** is mostly the same as the read, but the sender can put the RDMA packet and inform that it is a write operation.
+
+Write RDMA usage:
+
+- Log: including the commitment of the transaction, the leader can use the write RDMA to append the log to the followers.
+- RPC message queue: one queue per pair. The sender can use the write RDMA to put the message to the queue, and the receiver uses a polling thread to read the message from the queue, and respond to the sender using the write RDMA. This is more efficient than the standard RPC.
+
+In FaRM, the one-sided RDMA spends about 5 microseconds, which is like the time of accessing local memory.
+
+## Transaction using RDMA
+
+As RDMA does not provide the ability to run code on servers, it needs other protocols or mechanisms to implement 2PC and transactions, canceling or reducing the usage the participation of the servers.
+
+## OOC (Optimistic Concurrency Control)
+
+- read objects without locking (version number)
+- add validation step before commit
+  - if version number conflicts, abort the transaction
+- commit the transaction
+
+If the transaction is aborted, the client will retry the transaction. The read operation can be done simply by RDMA, with no need to modify any state of the server.
+
+![FaRM_Transaction](/images/FaRM_Transaction.png)
+
+## Strict serializability
+
+The strict serializability here is guaranteed by the version number.
+
+Assume that there are 2 transactions T1 and T2, and both of them did:
+
+```markdown
+TxBegin
+  o = read(oid)
+  o.data = o.data + 1
+  write(oid, o)
+TxCommit
+```
+
+The result of `o.data` can be 0, 1, or 2 with following situations:
+
+- `0`. one detected the conflict and aborted, while the other failed.
+- `1`. one conflict or failed, while the other succeeded.
+- `2`. both succeeded.
+
+If T1 and T2 read in the same time, and T1 get the lock first:
+
+- if T1 did not commit, T2 will abort.
+- if T1 committed and T2 get the lock, when validating, T2 will find the version number is not the same as the one it read, and will abort.
+
+Thus, if T1 and T2 did not fail, after one of them committed, the other will be aborted.
+
+To test it, let T1 and T2 be:
+
+```markdown
+Assume x = 0, y = 0
+T1:             T2:
+if x == 0:      if y == 0:
+    y = 1           x = 1
+```
+
+In this test case, the result can be either x = 1, y = 0 or x = 0, y = 1, but not x = 1, y = 1.
+
+If T1 and T2 are executed in parallel:
+
+| Time | T1                   | T2                                                                               |
+|------|----------------------|----------------------------------------------------------------------------------|
+| 1    | read(x), read(y)     | read(y), read(x)                                                                 |
+| 2    | lock(y), validate(x) |                                                                                  |
+| 3    |                      | lock(x), validate(y)<br>the top bit of the 64 bit metadata is 1(locked)<br>abort |
+
+So it is strict serializability.
+
+## Summary
+
+- Fast
+- Assume few conflicts
+- Data should fit in the memory
+- Replication is only in the same data center
+- Require stable hardware
