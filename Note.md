@@ -129,6 +129,13 @@
   - [OOC (Optimistic Concurrency Control)](#ooc-optimistic-concurrency-control)
   - [Strict serializability](#strict-serializability)
   - [Summary](#summary-2)
+- [Spark](#spark)
+  - [Programming model: RDD](#programming-model-rdd)
+  - [Fault tolerance](#fault-tolerance-2)
+    - [Narrow dependency](#narrow-dependency)
+    - [Wide dependency](#wide-dependency)
+  - [Iterative: PageRank](#iterative-pagerank)
+  - [Summary](#summary-3)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -2062,3 +2069,98 @@ So it is strict serializability.
 - Data should fit in the memory
 - Replication is only in the same data center
 - Require stable hardware
+
+<h6 align="center">======= Lec.16 Sun. 1 Sep. 2024 =======</h6>
+
+# Spark
+
+- "Successor" of Hadoop, with the same MapReduce model, but with more features and optimizations.
+- Widely used in the industry. (Databricks, Apache Spark)
+- Wide-range of applications.
+- In-memory computations.
+
+## Programming model: RDD
+
+- Resilient Distributed Dataset
+
+```Scala
+// 1.create an RDD: lines. Here RDD is stored in HDFS.
+lines = sparks.textFile("hdfs://...")
+// 2.create another RDD: errors, lines are read-only, and errors are filtered and stored to the new RDD.
+errors = lines.filter(_.startsWith("ERROR"))
+// 3.persist the RDD(errors) in memory for future use
+errors.persist() // Different from MapReduce, which will write and read the intermediate results in intermediate files.
+
+// 4. Count errors mentioning MySQL. This is an action, and will trigger the computation of the RDD.
+errors.filter(_.contains("MySQL")).count()
+
+// 5. Return the time fields or errors mentioning HDFS as an array
+// assuming time is the first field in a tab-separated format
+errors.filter(_.contains("HDFS"))
+      .map(_.split("\t")(0))
+      .collect() // collect is another action that will trigger the computation of the RDD
+```
+`lines (filter)=> errors (filter)=> HDFS (map)=> time (collect)=> Array`
+
+The APIs of RDD support 2 kinds of Operations:
+
+- Transformation: transform the RDD to another RDD. **Every RDD is immutable(read-only)**, and the transformation can only generate a new RDD from the existing RDD.
+- Action: trigger the computation of the RDD. Only after executing the action, the Transformation will be executed. If using the command line, the result will be printed only after the action is executed.
+
+![RDD_APIs](/images/RDD_Transformations_Actions.png)
+
+## Fault tolerance
+
+- Narrow dependency: parentRDD and childRDD is one-to-one
+- Wide dependency: parentRDD and childRDD is one-to-N
+
+
+### Narrow dependency
+
+This is mostly the same as MapReduce. If a worker of Spark failed, the stage will be re-executed, and the partition of the RDD will be reread or recomputed.
+
+### Wide dependency
+
+Assume that a Spark is in a command flow, `childRDD1` has data from `parentRDD1 ~ parentRDD3`, and operations like `join` are done and generate `childRDD2`. If the worker generating `childRDD2` failed, according to the Narrow dependency fault tolerance, the whole process will be re-executed, and the data of `parentRDD1 ~ parentRDD3` will be re-read or re-computed. This will be inefficient and costly.
+
+The solution here is to set checkpoints or persist the intermediate results of the RDDs.
+
+## Iterative: PageRank
+
+PageRank is an iterative algorithm that calculates the weight / importance of the web pages. The weight of a page is the sum of the weights of the pages that link to it.
+
+```Scala
+val links = spark.textFile(...).map(...).persist()
+var ranks = // RDD of (URL, rank) pairs
+for (i <- 1 to ITERATIONS) {
+    // build an RDD of (targetURL, float) pairs
+    // with the contributions sent by each page
+    val contributions = links.join(ranks).flatMap {
+        (URL, (links, rank)) => 
+          links.map(dest => (dest, rank / links.size))
+    }
+    // sum contributions by URL and get new ranks
+    ranks = contributions.reduceByKey((x, y) => x + y).mapValues(v => a / N + (1 - a) * sum) // if add .collect(), it will trigger the computation
+}
+```
+
+`links` stores the connections of the graphs (URL pointing relationships), and `ranks` stores the rank of the URLs.
+
+![PageRank](/images/PageRank.png)
+
+In the image, the links join the ranks and generate a new stage of RDD. This can be optimized to parallel by partitioning the RDDs using hash partitioning, thus the `join` operation can be done like narrow dependency.
+
+The only need to persist the `links`, as things like `ranks1`, `ranks2`, etc. are new RDDs. For certain situations, the `ranks` can be persisted to avoid re-computation if crashed.
+
+The `contribs` can be calculated in parallel if partitioned, and they will finally be reduced by the `.collect()` operation.
+
+## Summary
+
+- RDD: Resilient Distributed Dataset, made by functional transformations.
+- group together in sort of lineage graph
+  - allows reusing the intermediate results
+  - clever optimizations by coordinator
+- more expressive than MapReduce
+- in memory for better read / write performance
+
+Each worker runs a stage in a partition. All stages run in parallel on different workers. Every stage in pipeline is a batch of tasks.
