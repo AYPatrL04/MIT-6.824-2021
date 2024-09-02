@@ -63,12 +63,10 @@
   - [Vote storage](#vote-storage)
   - [Log diverge](#log-diverge)
 - [Fault Tolerance: Raft (2)](#fault-tolerance-raft-2)
-  - [Leader election rule:](#leader-election-rule)
   - [Log catchup](#log-catchup)
   - [Erasing log entries](#erasing-log-entries)
   - [Log catch up quickly](#log-catch-up-quickly)
   - [Persistence](#persistence)
-    - [States needed to be persisted:](#states-needed-to-be-persisted)
   - [Service Recovery](#service-recovery)
   - [Using Raft](#using-raft)
   - [Linearizability / Strong Consistency](#linearizability--strong-consistency)
@@ -136,6 +134,21 @@
     - [Wide dependency](#wide-dependency)
   - [Iterative: PageRank](#iterative-pagerank)
   - [Summary](#summary-3)
+- [Memcached](#memcached)
+  - [Website evolution](#website-evolution)
+  - [Eventual consistency](#eventual-consistency)
+  - [Cache invalidation](#cache-invalidation)
+  - [Fault tolerance](#fault-tolerance-3)
+  - [High performance](#high-performance-1)
+  - [Protecting DB](#protecting-db)
+    - [New cluster](#new-cluster)
+    - [Thundering herd](#thundering-herd)
+    - [Memcached server failure](#memcached-server-failure)
+  - [Race](#race)
+    - [Stale set](#stale-set)
+    - [Cold cluster](#cold-cluster)
+    - [Regions (Primary and Backup)](#regions-primary-and-backup)
+  - [Summary](#summary-4)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -1162,7 +1175,7 @@ Here each of (a), (c), (d) has the possibility to become the leader generally. A
 - Snapshots
 - Linearizability
 
-## Leader election rule:
+**Leader election rule:**
 
 - Majority
 - At-least-up-to-date: **the server should have the newest term**
@@ -1196,7 +1209,7 @@ It is preferred to use the snapshot to recover the system, as it is much faster 
 
 The states needed to be persisted whenever any of which changed.
 
-### States needed to be persisted:
+**States needed to be persisted:**
 
 - voteFor: the server can only vote once in a term.
 - currentTerm: the term count of the server, which should guarantee that it is monotonic increasing.
@@ -1843,17 +1856,17 @@ Replicas were usually deployed at somewhere close to clients, such that client c
 
 Multiple servers as Coordinator, multiple servers execute the operations related to shards.
 
-| Time | Client                                                                | Paxos-Coordinator                                                          | Paxos-Shard-A(Sa)                                                           | Paxos-Shard-B(Sb)                                                           |
-|------|-----------------------------------------------------------------------|----------------------------------------------------------------------------|-----------------------------------------------------------------------------|-----------------------------------------------------------------------------|
-| 1    | Transaction ID: tid<br>To Sa Leader: read(a)<br>To Sb Leader: read(b) |                                                                            |                                                                             |                                                                             |
-| 2    |                                                                       |                                                                            | Leader lock(x) by 2PL<br>Set owner as Client                                | Leader lock(y) by 2PL<br>Set owner as Client                                |
-| 3    | Send to Coordinator:<br> add(x), dec(y)                               |                                                                            |                                                                             |                                                                             |
-| 4    |                                                                       | Received the request<br><code>?add(x), ?dec(y)</code>                      |                                                                             |                                                                             |
-| 5    |                                                                       |                                                                            | R-Lock => W-Lock<br><code>log(add(x))</code>                                | R-Lock => W-Lock<br><code>log(dec(y))</code>                                |
-| 6    |                                                                       | <code>?prepare(Sa)</code><br><code>?prepare(Sb)</code><br><code>log</code> |                                                                             |                                                                             |
-| 7    |                                                                       |                                                                            | <code>OK</code> if: <br>locked, <br>logged, <br>synced, <br>ready to commit | <code>OK</code> if: <br>locked, <br>logged, <br>synced, <br>ready to commit |
-| 8    |                                                                       | <code>commit(tid)</code><br><code>log</code>                               |                                                                             |                                                                             |
-| 9    |                                                                       |                                                                            | install log, <br>execute <code>add(x)</code>, <br>unlock x, <code>OK</code> | install log, <br>execute <code>dec(y)</code>, <br>unlock y, <code>OK</code> |
+| Time | Client                                                                | Paxos-Coordinator                          | Paxos-Shard-A(Sa)                                                | Paxos-Shard-B(Sb)                                                |
+|------|-----------------------------------------------------------------------|--------------------------------------------|------------------------------------------------------------------|------------------------------------------------------------------|
+| 1    | Transaction ID: tid<br>To Sa Leader: read(a)<br>To Sb Leader: read(b) |                                            |                                                                  |                                                                  |
+| 2    |                                                                       |                                            | Leader lock(x) by 2PL<br>Set owner as Client                     | Leader lock(y) by 2PL<br>Set owner as Client                     |
+| 3    | Send to Coordinator:<br>`add(x), dec(y)`                              |                                            |                                                                  |                                                                  |
+| 4    |                                                                       | Received the request<br>`?add(x), ?dec(y)` |                                                                  |                                                                  |
+| 5    |                                                                       |                                            | R-Lock => W-Lock<br>`log(add(x))`                                | R-Lock => W-Lock<br>`log(dec(y))`                                |
+| 6    |                                                                       | `?prepare(Sa)`<br>`?prepare(Sb)`<br>`log`  |                                                                  |                                                                  |
+| 7    |                                                                       |                                            | `OK` if: <br>locked, <br>logged, <br>synced, <br>ready to commit | `OK` if: <br>locked, <br>logged, <br>synced, <br>ready to commit |
+| 8    |                                                                       | `commit(tid)`<br>`log`                     |                                                                  |                                                                  |
+| 9    |                                                                       |                                            | install log, <br>execute `add(x)`, <br>unlock x, `OK`            | install log, <br>execute `dec(y)`, <br>unlock y, `OK`            |
 
 Shards replicating the lock that is holding when it does the `prepare` operation rather than directly replicating the whole lock table.
 
@@ -2164,3 +2177,117 @@ The `contribs` can be calculated in parallel if partitioned, and they will final
 - in memory for better read / write performance
 
 Each worker runs a stage in a partition. All stages run in parallel on different workers. Every stage in pipeline is a batch of tasks.
+
+<h6 align="center">======= Lec.17 Mon. 2 Sep. 2024 =======</h6>
+
+# Memcached
+
+From the paper by Facebook in 2013, we can learn:
+- Impressive performance
+- Tension between consistency and performance (the application of Facebook does not need real linearized consistency)
+- Cautionary tale
+
+## Website evolution
+
+```markdown
+   single   server  + single   database 
+-> multiple servers + single   database 
+-> multiple servers + multiple databases (sharding, db parallelism, 2PL + 2PC)
+-> multiple servers + multiple databases + cache (cache layer)
+``` 
+
+For `multi-servers + multi-databases + cache`, every single cache server is called **Memcached daemon**, and the whole cache cluster is called **Memcached**.
+
+The main challenges here are:
+
+1. how to maintain the consistency between the cache and the database
+2. how to guarantee that the database will not be overloaded
+
+## Eventual consistency
+
+- write ordering (by database)
+- reads are behind is fine
+  - clients should be able to read their own latest writes
+
+This is similar to Zookeeper, where the different sessions can possibly not able to read the latest data written by other sessions, but can read their own latest writes.
+
+## Cache invalidation
+
+![Memcached](/images/Memcached.png)
+
+1. Front-end writes the data to MySQL
+2. Squeal daemon monitoring the transaction log of MySQL, and finds a key that is modified
+3. Squeal daemon sends the message that the key is invalid to the Memcached
+4. Memcached deletes the cached data of the key
+5. Front-end reads the data from Memcached
+6. If the data is not found in Memcached, it will read from MySQL, and write the data to Memcached
+
+## Fault tolerance
+
+Facebook deployed 2 data centers including the primary data center and backup data center.
+
+- the Primary supports the read and write operations, and the Backup supports the read operations only
+- if the Backup receives the write operation, it will request the Primary.
+- the changes in the Primary will be monitored by the Squeal, and the changes will be synced to the Backup.
+  - the short latency exists, but acceptable (not strong consistency)
+
+## High performance
+
+- Partitioning or sharding
+  - Capacity: Every shard can store a large amount of data
+  - Parallelism: Different shards can be accessed in parallel
+- Replication
+  - hot key: Same key can be extended to different Memcached servers to ease the pressure of hot key access
+  - Capacity: Need to enlarge the capacity of the Memcached servers for replication
+- Cluster
+  - Popular key: The popular key can be stored in the Memcached servers that are in the same cluster, and the key can be accessed in parallel
+  - Reduce connection: Prevented in-cast congestion by averagely distributing the TCP connections from the front end to the Memcached servers
+  - Reduce network pressure: It is hard to build bisection bandwidth networks that can sustain a huge load
+
+There is a regional pool that is used to store the keys that are not popular or infrequently used.
+
+## Protecting DB
+
+If all Memcached servers are down, the database might be overloaded when receiving too many requests.
+
+### New cluster
+  - If a new cluster that is supposed to handle 50\% read requests is built but has not been warmed up, the requests will be sent to the database, which will cause the database to be overloaded. Thus, the new cluster should be warmed up before being used.
+### Thundering herd
+  - If a hot key is updated and its cache is invalidated, all the requests will be sent to the database, which will cause the database to be overloaded. Here facebook uses **lease**, that when a hot key is invalid, a front end will get a lease and be responsible for updating the cache, and the other front ends will retry the request to the cache rather than the database.
+### Memcached server failure
+  - Set a **gutter pool** that is used to temporarily handle the situation when a Memcached server is down, and the requests will be first sent to the gutter pool, and then be sent to the database if the data is not found in the gutter pool.
+
+## Race
+
+### Stale set
+
+| Time | Client 1                | Client 2                        |
+|------|-------------------------|---------------------------------|
+| 1    | get(key)<br>get lease   |                                 |
+| 2    |                         | delete(key)<br>invalidate lease |
+| 3    | put(key, v)<br>Rejected |                                 |
+
+Here C2 updated the database by deleting the key, so the lease will be invalidated, and C1 will fail to update the cache. This prevents the stale set and the [Thundering herd](#thundering-herd).
+
+### Cold cluster
+
+| Time | Client 1                            | Client 2                                                                              |
+|------|-------------------------------------|---------------------------------------------------------------------------------------|
+| 1    | delete(key)<br>*two-second hold-off |                                                                                       |
+| 2    |                                     | get from cold cluster(not found)<br>get from warm cluster<br>put(key, v)<br>permanent |
+
+*Two-second hold-off: If the key is deleted from a cold cluster, the put(key) will not be executed in the next 2 seconds, so the `put(key, v)` might be rejected. This will only happen when the cluster is warming up, and 2 seconds is enough for synchronization.
+
+### Regions (Primary and Backup)
+
+C1 writes to the Backup, and the data will be written to the Primary, then execute `delete(key)` to invalidate the cache in the Backup. At current stage if C1 execute `get(key)`, it will get `null` as the data requires some time to be synced to the Backup by Squeal.
+
+Facebook uses **remote marker**, that when `delete(key)` is executed, it will mark key as "remote", and the `get(key)` will find the mark and read the data from the Primary. After finishing the `get(key)`, the "remote" mark will be removed.
+
+## Summary
+
+- Caching is vital
+- 
+  - Partitioning and sharding
+  - Replication
+- Consistency between memcache and database, `lease` / `two-second hold-off` / `remote marker`

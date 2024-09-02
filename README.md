@@ -21,8 +21,8 @@ Notes see [/Note.md](/Note.md)
 - [x] Lec 13
 - [x] Lec 14
 - [x] Lec 15
-- [ ] Lec 16
-- [ ] Lec 17
+- [x] Lec 16
+- [x] Lec 17
 - [ ] Lec 18
 - [ ] Lec 19
 - [ ] Lec 20
