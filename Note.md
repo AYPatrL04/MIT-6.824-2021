@@ -149,6 +149,15 @@
     - [Cold cluster](#cold-cluster)
     - [Regions (Primary and Backup)](#regions-primary-and-backup)
   - [Summary](#summary-4)
+- [Fork Consistency - SUNDR (Secure UNtrusted Data Repository)](#fork-consistency---sundr-secure-untrusted-data-repository)
+  - [Setting: Network file system](#setting-network-file-system)
+  - [Focus: Integrity](#focus-integrity)
+  - [Safety problem example](#safety-problem-example)
+  - [Big idea: Signed logs of operations](#big-idea-signed-logs-of-operations)
+  - [Fork consistency](#fork-consistency)
+  - [Detecting forks](#detecting-forks)
+  - [Snapshot per user and version vector](#snapshot-per-user-and-version-vector)
+  - [Summary](#summary-5)
 
 <h6 align="center">======= Lec.01 Fri. 02 Aug. 2024 =======</h6>
 
@@ -2291,3 +2300,127 @@ Facebook uses **remote marker**, that when `delete(key)` is executed, it will ma
   - Partitioning and sharding
   - Replication
 - Consistency between memcache and database, `lease` / `two-second hold-off` / `remote marker`
+
+<h6 align="center">======= Lec.18 Tue. 3 Sep. 2024 =======</h6>
+
+# Fork Consistency - SUNDR (Secure UNtrusted Data Repository)
+
+**Decentralized systems**
+
+For such systems, the designer needs to consider or account for the **[Byzantine fault](https://en.wikipedia.org/wiki/Byzantine_fault)**, which is a fault that might occur in a distributed system that might cause the system to behave in an unexpected way.
+
+SUNDR proposes some powerful ideas like signed logs that can be used in the decentralized systems.
+
+## Setting: Network file system
+
+SUNDR is designed for the network file system, where the clients can read and write the files. This is similar to the Petal in Frangipani, and its procedure of the file operations are mostly the same as Frangipani. The difference is that SUNDR supposed that the network file system can be byzantine, and the potential attackers might be able to master the NFS using some techniques. For this reason, the clients in SUNDR are not trusted, neither the file system.
+
+Possible attacks:
+
+- bugs in software
+- system administrator with weak password
+- physical break-in
+- bribes operators / colludes with malicious clients
+
+## Focus: Integrity
+
+Like Debian Linux was once being attacked and its code was injected with trapdoors. And the development was frozen in order to make sure the integrity of the code, that which part of the code is right and which part has been modified.
+
+The integrity is to make sure that the system structure is right, and the data is not modified by the attackers.
+
+## Safety problem example
+
+Assume zoobar is a virtual bank application, and the users can transfer the zoobars to each other as a kind of currency.
+
+auth.py: the authentication module
+bank.py: the bank module
+
+```markdown
+A: someone responsible for the authentication, and has the permission to modify the auth.py
+B: someone responsible for the bank, and has the permission to modify the bank.py
+C: someone copied the project, deployed it, and was unfortunately attacked by the attackers
+```
+
+Consider the following situation:
+
+```markdown
+S modified the auth.py, such that the project deployed by C will lack some authentication steps
+S modified the bank.py to delete the authentication steps
+```
+
+The common solutions to prevent the above situation are as follows:
+
+Use asymmetric encryption to sign the code (public key and private key), and that S cannot modify the `auth.py` as S does not have the private key of A, and the signature of the code will be verified and eventually be rejected by the code repository.
+
+However, here S still has some methods to attack the system, such as sending the previous version of `auth.py` as it is signed by A and might have some possible bugs that make it vulnerable. Also, S can declare that the `auth.py` has been deleted, and C will not be able to verify if it is true. This might need to pack up all the files, and decide the newest version of the files.
+
+## Big idea: Signed logs of operations
+
+Assume that a log like:
+
+| mod<br>auth.py<br>signed by A | mod<br>bank.py<br>signed by B | fetch<br>auth.py<br>signed by C | fetch<br>bank.py<br>signed by C |
+|-------------------------------|-------------------------------|---------------------------------|---------------------------------|
+
+By using the logs, the system can verify the operations with the operators, and if someone received a log, it will not able to lose the previous logs by comparing the signatures. It is also harder for the attackers to delete some logs.
+
+The procedure of a user downloading the project:
+
+1. checks signatures
+2. check its own last log entry
+3. construct FS
+4. add the new log entry, and sign it
+5. upload the new log entry to FS
+
+**Why fetches in the log?**
+
+If the fetch is not in the log, assume that `auth.py` and `bank.py`, if C fetches them with different versions, there might have some problems when running.
+
+While if logged:
+
+1. C fetches `auth.py`, received the log entry of A and B
+2. C adds the log, uploads the `fetch` log entry to FS
+3. C fetches `bank.py`, received the log entry of A and B, and the `fetch` log entry of C. If the `fetch` log entry is not found, the system will reject the fetch operation.
+
+## Fork consistency
+
+The server can not really operate the logs, it can only send prefixes or hide parts of the logs. So when logs are modified, different clients might receive different logs.
+
+Assume that the logs are like:
+
+| Server S | a |   |   |
+|----------|---|---|---|
+| Client A | a | b | c |
+| Client B | a | d | e |
+
+Here clients have same log prefix, and S will keep both logs rather than merge them.
+
+## Detecting forks
+
+1. out-of-band communication: the clients can communicate with each other to check if the logs of one are the prefix of the other
+2. timestamp box: introduce a timestamp box that adds the timestamp to the logs every several minutes (similar to fork), and the clients can check the timestamp to see if the logs are forked
+
+Bitcoin: settle forks, like the 2nd above, using some methods to achieve the consensus and decide which fork can be used.
+
+## Snapshot per user and version vector
+
+![User_Snapshot](/images/User_and_Group_i-handles.png)
+
+SUNDR uses the snapshot per user, and the version vector to handle the fork consistency problem.
+
+The server maintains logs, and others maintain the snapshots.
+
+An i-handle is used to represent the snapshot of the user, it maps to an i-table hash table that stores all inodes and their hash values. If a file was modified, the hash value of its corresponding inode will be updated, and the i-table, i-handle will be updated as well, which serves a complete snapshot.
+
+The version vector is used to handle the consistency between users. Every version vector maps to an i-handle, and maintains the modify count of all users.
+
+```pseudo
+VS_A: i-handle-A {A: 1, B: 0, C: 0}
+VS_B: i-handle-B {A: 1, B: 1, C: 0}
+
+C: By comparing the version vectors, C will choose the newest, here B, and fetch its file system snapshot.
+```
+
+## Summary
+
+- Byzantine participants
+- Signed logs
